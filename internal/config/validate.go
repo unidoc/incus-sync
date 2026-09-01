@@ -96,7 +96,7 @@ func (f *Fleet) validateTemplateSecrets() error {
 		return nil
 	}
 	// Load the encrypted secrets file's KEY structure (no decrypt).
-	structure, err := LoadSecretsStructure(f.configDir)
+	structure, err := LoadSecretsStructure(f.fleetPath)
 	if err != nil {
 		return err
 	}

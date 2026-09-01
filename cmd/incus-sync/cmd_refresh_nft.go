@@ -70,7 +70,7 @@ func runRefreshNft(host, socketPath string) error {
 		return err
 	}
 
-	meta, err := config.LoadFleetMeta(configDir)
+	meta, err := config.LoadFleetMeta(fleetPath)
 	if err != nil {
 		return err
 	}

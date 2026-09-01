@@ -43,8 +43,8 @@ type Remote struct {
 // Returns (nil, nil) if the file does not exist — the caller falls
 // back to the local unix socket. Returns an error only on decrypt or
 // parse failure.
-func LoadRemote(configDir, host string) (*Remote, error) {
-	path := filepath.Join(configDir, "hosts", host, "remote.sops.yaml")
+func LoadRemote(fleetPath, host string) (*Remote, error) {
+	path := filepath.Join(fleetPath, "hosts", host, "remote.sops.yaml")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -60,7 +60,7 @@ func LoadRemote(configDir, host string) (*Remote, error) {
 		decrypted, err = decrypt.Data(raw, "yaml")
 		if err != nil {
 			return nil, fmt.Errorf("sops decrypt %s: %w  "+
-				"(check SOPS_AGE_KEY_FILE or ~/.config/sops/age/keys.txt)",
+				"(check SOPS_AGE_KEY or SOPS_AGE_KEY_FILE)",
 				path, err)
 		}
 	} else {
@@ -86,11 +86,11 @@ func LoadRemote(configDir, host string) (*Remote, error) {
 	return &r, nil
 }
 
-// ListRemotes returns every host under configDir/hosts/ that has a
+// ListRemotes returns every host under fleetPath/hosts/ that has a
 // remote.sops.yaml (encrypted or not). Used by `incus-sync remote
 // list` and by the `fleet` command to iterate all remotes.
-func ListRemotes(configDir string) ([]string, error) {
-	hostsDir := filepath.Join(configDir, "hosts")
+func ListRemotes(fleetPath string) ([]string, error) {
+	hostsDir := filepath.Join(fleetPath, "hosts")
 	entries, err := os.ReadDir(hostsDir)
 	if err != nil {
 		if os.IsNotExist(err) {

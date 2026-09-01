@@ -31,7 +31,7 @@ should paste. incus-sync never deletes anything itself.`,
 			if host == "" {
 				return fmt.Errorf("pass --host <name>")
 			}
-			fleet, err := config.Load(configDir, host)
+			fleet, err := config.Load(fleetPath, host)
 			if err != nil {
 				return err
 			}

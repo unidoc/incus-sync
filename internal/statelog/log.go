@@ -88,11 +88,11 @@ type Lock struct {
 	f *os.File
 }
 
-// Acquire creates and flocks $configDir/.incus-sync.lock exclusively.
+// Acquire creates and flocks $fleetPath/.incus-sync.lock exclusively.
 // Blocks up to timeout, then errors out with a helpful "held by pid N"
 // message.
-func Acquire(configDir string, timeout time.Duration) (*Lock, error) {
-	path := filepath.Join(configDir, ".incus-sync.lock")
+func Acquire(fleetPath string, timeout time.Duration) (*Lock, error) {
+	path := filepath.Join(fleetPath, ".incus-sync.lock")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open lockfile %s: %w", path, err)

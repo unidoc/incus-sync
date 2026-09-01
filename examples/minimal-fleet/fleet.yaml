@@ -1,9 +1,3 @@
-# Identifies this fleet. Required — also names its secret vault
-# (~/.config/incus-sync/minimal-fleet/), so no two fleets ever share a
-# vault passphrase or ssh-agent-derived key. See internal/vault's
-# package doc, and README.md's "Auth" section.
-name: minimal-fleet
-
 # Declares every Incus project this fleet manages. Required — no
 # fallback. See docs/schema.md.
 projects:

@@ -33,7 +33,7 @@ Use this to answer "why does webapp have this rule?" without grepping.`,
 			if host == "" {
 				return fmt.Errorf("pass --host <name>")
 			}
-			fleet, err := config.Load(configDir, host)
+			fleet, err := config.Load(fleetPath, host)
 			if err != nil {
 				return err
 			}

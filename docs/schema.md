@@ -1,28 +1,26 @@
 # YAML schema
 
-Every YAML file in the config repo describes one incus-sync object.
+Every YAML file in the fleet repo describes one incus-sync object.
 Filename minus `.yaml` MUST equal the declared `name`. The loader
 enforces this.
 
 ## fleet.yaml
 
 One per repo, at the root. Not a per-object file — declares fleet-wide
-metadata. Every field is required; there is no silent default.
+metadata.
 
 ```yaml
-name: <name>               # identifies this fleet — see below
-projects:                 # every Incus project this fleet manages
+projects:                 # every Incus project this fleet manages (required)
   - <project>...
 network_project: <string> # optional; where ACLs/address-sets live (default "default")
 ```
 
-`name:` is the one field worth dwelling on: it is NOT a secret itself,
-just a label. Two fleets with different `name:` values get completely
-independent AGE vaults (`~/.config/incus-sync/<name>/`) — never
-share a passphrase, an ssh-agent-derived key, or an unlocked-cache
-window, even run from the same operator machine. Pick something unique
-across every fleet you manage (the repo name is a safe default) and
-never reuse it for a different fleet.
+There is no `name:` field — a fleet is identified purely by its
+fleet-path (the repo checkout itself), so nothing needs to be named or
+kept unique across fleets. Secret decryption is scoped entirely by
+`.sops.yaml`'s own recipient list, not by anything incus-sync tracks —
+see [README.md's Auth section](../README.md#auth) and
+`internal/vault`'s package doc.
 
 ## Six object kinds
 

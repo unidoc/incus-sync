@@ -43,7 +43,7 @@ Examples:
 		Args:               cobra.MinimumNArgs(1),
 		DisableFlagParsing: true, // pass raw args through
 		RunE: func(cmd *cobra.Command, args []string) error {
-			hosts, err := config.ListRemotes(configDir)
+			hosts, err := config.ListRemotes(fleetPath)
 			if err != nil {
 				return err
 			}
@@ -58,7 +58,7 @@ Examples:
 			var overallErr error
 			for _, h := range hosts {
 				fmt.Printf("\n== %s ==\n", h)
-				invocation := []string{"--config-dir", configDir, "--host", h}
+				invocation := []string{"--fleet-path", fleetPath, "--host", h}
 				invocation = append(invocation, args...)
 				c := exec.Command(self, invocation...)
 				c.Stdout = os.Stdout

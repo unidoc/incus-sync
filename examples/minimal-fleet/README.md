@@ -17,10 +17,10 @@ operations:
 
 ```sh
 just build
-./bin/incus-sync --config-dir examples/minimal-fleet validate --host web1
-./bin/incus-sync --config-dir examples/minimal-fleet validate --host db1
-./bin/incus-sync --config-dir examples/minimal-fleet render --host web1 --kind all
-./bin/incus-sync --config-dir examples/minimal-fleet explain --host web1 blog
+./bin/incus-sync --fleet-path examples/minimal-fleet validate --host web1
+./bin/incus-sync --fleet-path examples/minimal-fleet validate --host db1
+./bin/incus-sync --fleet-path examples/minimal-fleet render --host web1 --kind all
+./bin/incus-sync --fleet-path examples/minimal-fleet explain --host web1 blog
 ```
 
 `explain blog` shows *why* each ACL on `blog` is attached — one comes

@@ -45,7 +45,7 @@ Example:
 }
 
 func runCreate(host, name, image, description string, tags []string, ingressDefault, egressDefault string) error {
-	instDir := filepath.Join(configDir, "hosts", host, "instances", name)
+	instDir := filepath.Join(fleetPath, "hosts", host, "instances", name)
 	if _, err := os.Stat(instDir); err == nil {
 		return fmt.Errorf("%s already exists — refusing to overwrite", instDir)
 	}

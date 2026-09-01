@@ -48,7 +48,7 @@ func remoteListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List every configured remote (hosts/<host>/remote.sops.yaml)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			names, err := config.ListRemotes(configDir)
+			names, err := config.ListRemotes(fleetPath)
 			if err != nil {
 				return err
 			}
@@ -56,22 +56,17 @@ func remoteListCmd() *cobra.Command {
 				fmt.Println("(no remotes configured)")
 				return nil
 			}
-			// LoadRemote calls SOPS, which reads the age key. Unlock
-			// once up front (idempotent, cached) rather than let every
-			// remote in the loop below fail with a decrypt error on
-			// the passphrase/ssh-agent backends — matches
+			// LoadRemote calls SOPS, which reads the age key. Resolve
+			// it once up front rather than let every remote in the
+			// loop below fail with a decrypt error — matches
 			// resolveRemoteForHost's pattern in main.go.
-			meta, err := config.LoadFleetMeta(configDir)
-			if err != nil {
-				return err
-			}
-			if _, err := vault.EnsureUnlocked(meta.Name, promptPassphrase); err != nil {
+			if _, err := vault.EnsureUnlocked(); err != nil {
 				return err
 			}
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tURL\tFINGERPRINT")
 			for _, n := range names {
-				r, err := config.LoadRemote(configDir, n)
+				r, err := config.LoadRemote(fleetPath, n)
 				if err != nil {
 					fmt.Fprintf(tw, "%s\t<sops-decrypt-failed>\t%v\n", n, err)
 					continue
@@ -185,7 +180,7 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 		return err
 	}
 
-	dir := filepath.Join(configDir, "hosts", host)
+	dir := filepath.Join(fleetPath, "hosts", host)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -217,7 +212,7 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 
 	// Diagnostics to stderr, cert PEM to stdout — so caller can pipe
 	// stdout to `ssh ... 'incus config trust add-certificate -'`.
-	meta, err := config.LoadFleetMeta(configDir)
+	meta, err := config.LoadFleetMeta(fleetPath)
 	if err != nil {
 		return err
 	}

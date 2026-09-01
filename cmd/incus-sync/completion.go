@@ -10,15 +10,15 @@ import (
 )
 
 // Cobra completion functions are called by the __complete subcommand and
-// do NOT go through PersistentPreRunE, so configDir may still be empty.
+// do NOT go through PersistentPreRunE, so fleetPath may still be empty.
 // Every completer starts by resolving it silently — a failure just yields
 // no suggestions rather than a distracting error.
 
-func ensureConfigDir() bool {
-	if configDir != "" {
+func ensureFleetPath() bool {
+	if fleetPath != "" {
 		return true
 	}
-	return resolveConfigDir() == nil
+	return resolveFleetPath() == nil
 }
 
 // hostFromFlag reads --host from the command. Empty if not set.
@@ -34,12 +34,12 @@ func hostFromFlag(cmd *cobra.Command) string {
 	return ""
 }
 
-// hostCompleter suggests entries under configDir/hosts/*/.
+// hostCompleter suggests entries under fleetPath/hosts/*/.
 func hostCompleter(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	if !ensureConfigDir() {
+	if !ensureFleetPath() {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	entries, err := os.ReadDir(filepath.Join(configDir, "hosts"))
+	entries, err := os.ReadDir(filepath.Join(fleetPath, "hosts"))
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
@@ -58,14 +58,14 @@ func instanceCompleter(cmd *cobra.Command, args []string, toComplete string) ([]
 	if len(args) > 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	if !ensureConfigDir() {
+	if !ensureFleetPath() {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
 	host := hostFromFlag(cmd)
 	if host == "" {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	fleet, err := config.Load(configDir, host)
+	fleet, err := config.Load(fleetPath, host)
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
@@ -82,14 +82,14 @@ func objectCompleter(cmd *cobra.Command, args []string, toComplete string) ([]st
 	if len(args) > 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	if !ensureConfigDir() {
+	if !ensureFleetPath() {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
 	host := hostFromFlag(cmd)
 	if host == "" {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	fleet, err := config.Load(configDir, host)
+	fleet, err := config.Load(fleetPath, host)
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}

@@ -42,7 +42,7 @@ pastes what looks right.`,
 			if host == "" {
 				return fmt.Errorf("pass --host <name> (or --all to search every host)")
 			}
-			fleet, err := config.Load(configDir, host)
+			fleet, err := config.Load(fleetPath, host)
 			if err != nil {
 				return err
 			}
@@ -60,7 +60,7 @@ pastes what looks right.`,
 // old name, and prints paste-ready shell commands to perform the rename
 // cleanly across the fleet. It does NOT execute the commands.
 func runRefsRename(oldName, newName string) error {
-	entries, err := os.ReadDir(filepath.Join(configDir, "hosts"))
+	entries, err := os.ReadDir(filepath.Join(fleetPath, "hosts"))
 	if err != nil {
 		return fmt.Errorf("read hosts/: %w", err)
 	}
@@ -72,7 +72,7 @@ func runRefsRename(oldName, newName string) error {
 		if !e.IsDir() {
 			continue
 		}
-		fleet, err := config.Load(configDir, e.Name())
+		fleet, err := config.Load(fleetPath, e.Name())
 		if err != nil {
 			continue
 		}
@@ -216,7 +216,7 @@ func kindKey(kind string) string {
 // runRefsAll walks every hosts/<h>/ and prints refs per host. Not found
 // on individual host is silent — the object might exist only on some.
 func runRefsAll(name string) error {
-	entries, err := os.ReadDir(filepath.Join(configDir, "hosts"))
+	entries, err := os.ReadDir(filepath.Join(fleetPath, "hosts"))
 	if err != nil {
 		return fmt.Errorf("read hosts/: %w", err)
 	}
@@ -225,7 +225,7 @@ func runRefsAll(name string) error {
 		if !e.IsDir() {
 			continue
 		}
-		fleet, err := config.Load(configDir, e.Name())
+		fleet, err := config.Load(fleetPath, e.Name())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %s: %v\n", e.Name(), err)
 			continue
@@ -241,7 +241,7 @@ func runRefsAll(name string) error {
 		found = true
 	}
 	if !found {
-		return fmt.Errorf("no object named %q in any host under %s/hosts/", name, configDir)
+		return fmt.Errorf("no object named %q in any host under %s/hosts/", name, fleetPath)
 	}
 	return nil
 }

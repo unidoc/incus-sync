@@ -14,7 +14,7 @@ func validateCmd() *cobra.Command {
 	var host string
 	cmd := &cobra.Command{
 		Use:   "validate",
-		Short: "Parse and semantically check the config repo",
+		Short: "Parse and semantically check the fleet repo",
 		Long: `Loads shared/ and hosts/<host>/ YAML and runs three layers of checks:
 
   1. Structural — YAML parses, filename matches declared name,
@@ -31,12 +31,12 @@ Read-only. Safe to run as a pre-commit hook or in CI.`,
 			if host != "" {
 				return validateOne(host)
 			}
-			hosts, err := config.ListHosts(configDir)
+			hosts, err := config.ListHosts(fleetPath)
 			if err != nil {
 				return err
 			}
 			if len(hosts) == 0 {
-				return fmt.Errorf("no hosts under %s/hosts/", configDir)
+				return fmt.Errorf("no hosts under %s/hosts/", fleetPath)
 			}
 			var failed []string
 			for _, h := range hosts {
@@ -59,7 +59,7 @@ Read-only. Safe to run as a pre-commit hook or in CI.`,
 }
 
 func validateOne(host string) error {
-	fleet, err := config.Load(configDir, host)
+	fleet, err := config.Load(fleetPath, host)
 	if err != nil {
 		return err
 	}

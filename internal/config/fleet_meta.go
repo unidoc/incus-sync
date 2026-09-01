@@ -29,15 +29,6 @@ type FleetMeta struct {
 	// project in its --projects scope so it can CRUD network resources.
 	// Defaults to "default".
 	NetworkProject string `yaml:"network_project,omitempty"`
-
-	// Name identifies this fleet — REQUIRED, no silent default. It also
-	// names this fleet's secret vault (see internal/vault's package
-	// doc): two fleets with different names never accidentally share a
-	// passphrase, an ssh-agent-derived key, or an unlocked-cache
-	// window, even run from the same operator machine. Pick something
-	// unique across every fleet you manage (the repo name is a safe
-	// default) and never reuse it for a different fleet.
-	Name string `yaml:"name"`
 }
 
 // Validate returns nil iff the meta is complete. Called by LoadFleetMeta;
@@ -46,25 +37,19 @@ func (m FleetMeta) Validate() error {
 	if len(m.Projects) == 0 {
 		return fmt.Errorf("%s: `projects:` list is required and must be non-empty", FleetMetaFilename)
 	}
-	if m.Name == "" {
-		return fmt.Errorf("%s: `name:` is required — give this fleet its own (never reuse another fleet's name)", FleetMetaFilename)
-	}
-	if err := checkBaseName("fleet", m.Name); err != nil {
-		return fmt.Errorf("%s: %w", FleetMetaFilename, err)
-	}
 	return nil
 }
 
-// LoadFleetMeta reads fleet.yaml at configDir root. The file is
+// LoadFleetMeta reads fleet.yaml at fleetPath root. The file is
 // REQUIRED — no legacy fallback. Every fleet declares its projects
 // explicitly. NetworkProject defaults to "default" (server-level
 // bridge namespace) but everything else must be spelled out.
-func LoadFleetMeta(configDir string) (FleetMeta, error) {
-	path := filepath.Join(configDir, FleetMetaFilename)
+func LoadFleetMeta(fleetPath string) (FleetMeta, error) {
+	path := filepath.Join(fleetPath, FleetMetaFilename)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return FleetMeta{}, fmt.Errorf("%s missing — every fleet must declare `name:` and `projects:` explicitly", path)
+			return FleetMeta{}, fmt.Errorf("%s missing — every fleet must declare `projects:` explicitly", path)
 		}
 		return FleetMeta{}, fmt.Errorf("%s: %w", path, err)
 	}

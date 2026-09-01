@@ -23,7 +23,7 @@ func diffCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "diff",
 		Short: "Compare rendered YAML against live Incus state",
-		Long: `Loads the config repo, resolves aliases and policies, then
+		Long: `Loads the fleet repo, resolves aliases and policies, then
 fetches live Incus state and prints what a sync would change.
 
 Never mutates Incus. Safe to run any time.
@@ -36,7 +36,7 @@ Formats:
 			if host == "" {
 				return fmt.Errorf("pass --host <name>")
 			}
-			fleet, err := config.Load(configDir, host)
+			fleet, err := config.Load(fleetPath, host)
 			if err != nil {
 				return err
 			}

@@ -47,7 +47,7 @@ go install github.com/unidoc/incus-sync/cmd/incus-sync@latest
 # 1. Get the binary (or `just build` from a checkout)
 install -m 0755 bin/incus-sync /usr/local/sbin/incus-sync
 
-# 2. Clone your fleet config repo
+# 2. Clone your fleet repo
 git clone <your-fleet-repo-url> /etc/incus-sync-fleet
 
 # 3. Point the tool at it
@@ -59,7 +59,7 @@ EOF
 incus-sync doctor
 ```
 
-`doctor` prints the config-dir source, hostname target, host-directory
+`doctor` prints the fleet-path source, hostname target, host-directory
 existence, and daemon reachability. Fails if anything is off. Run
 `incus-sync doctor --deep` to also check for an expected profile/network
 name (set `INCUS_SYNC_EXPECT_PROFILE` / `INCUS_SYNC_EXPECT_NETWORK` —
@@ -95,16 +95,17 @@ of running locally on each host, see [Auth](#auth) below.
 | `version` | Print the build version | No | No |
 
 Every command that resolves a target host defaults to `hostname -s`.
-Refuses to run if `hosts/<hostname>/` does not exist in the config repo
+Refuses to run if `hosts/<hostname>/` does not exist in the fleet repo
 and no explicit `--host` was given — unless that host has a
 `hosts/<host>/remote.sops.yaml`, in which case it connects over HTTPS
 instead (see [Auth](#auth)).
 
-## Config repo layout
+## Fleet repo layout
 
 ```
 <config-repo>/
-├── fleet.yaml              # fleet name, managed projects; secrets live in shared/secrets.sops.yaml
+├── fleet.yaml              # managed projects; secrets live in shared/secrets.sops.yaml
+├── .sops.yaml              # SOPS encryption policy: recipients + which files/fields to encrypt
 ├── shared/
 │   ├── aliases/           # named host groups (@name), never pushed
 │   ├── address-sets/      # fleet-wide address sets
@@ -169,69 +170,94 @@ Two connection modes, chosen automatically per host:
   target (`incus config trust add-certificate ...`), and writes the
   encrypted `remote.sops.yaml` for you to commit.
 
-### Secrets: SOPS/AGE, with no AGE key required on disk
+### Secrets: SOPS/AGE — incus-sync owns no cryptography of its own
 
 Both `remote.sops.yaml` (per-host TLS client cert/key) and
 `shared/secrets.sops.yaml` (fleet-wide app secrets, e.g. for
 `provision.after` templates) are SOPS-encrypted with AGE. Decrypting
-either requires an AGE private key, which `incus-sync vault` can source
-from several backends, tried in this order:
+either requires an AGE private key, which incus-sync resolves from
+exactly two of SOPS's own native env vars — nothing incus-sync-specific,
+no custom hook, no legacy fallback:
 
-1. `SOPS_AGE_KEY` env — already set, used as-is.
-2. `INCUS_SYNC_AGE_KEY_CMD` env — an arbitrary shell command whose
-   stdout is the key (1Password CLI, `pass`, `vault kv get`, ...).
-   Session state, prompting, and TTL are all deferred to that tool.
-3. `INCUS_SYNC_AGE_1PASSWORD_REF` env — shorthand for
-   `INCUS_SYNC_AGE_KEY_CMD='op read <ref>'`.
-4. **SSH-agent-backed vault** (`incus-sync vault ssh-init` /
-   `ssh-add-key`) — no AGE key material touches disk at all. A
-   deterministic signature from an ed25519 key held by your SSH agent
-   is run through HKDF to derive the key that unwraps a ciphertext blob
-   at `~/.config/incus-sync/<name>/vault.ssh`. Every unlock
-   requires a live SIGN from the agent, so it's only as strong as your
-   agent's own approval policy — a YubiKey or 1Password SSH agent with
-   touch/biometric confirmation is meaningfully different from a plain
-   `ssh-add`-loaded key with no prompt. This is the backend to use if,
-   like most operators, you don't want a raw AGE identity sitting on
-   disk.
-5. **Passphrase-encrypted vault** (`incus-sync vault init`) —
-   `~/.config/incus-sync/<name>/vault.age`, age-encrypted with
-   scrypt, unlocked into a TTL-limited runtime cache (`$XDG_RUNTIME_DIR`
-   tmpfs when available), 4h hard expiry / 60min idle timeout by
-   default (`INCUS_SYNC_VAULT_TTL`, `INCUS_SYNC_VAULT_IDLE`),
-   auto-shredded on expiry.
-6. Legacy plaintext `~/.config/sops/age/keys.txt` (SOPS's own default
-   location, global — not per-vault) — supported for migration only;
-   deprecated.
+1. `SOPS_AGE_KEY` env — the key content itself, already set, used as-is.
+2. `SOPS_AGE_KEY_FILE` env — path to an **identity file**. This is the
+   recommended way to point at anything beyond a raw key sitting in an
+   env var — see below for what can go in it.
 
-Backends 1-3 are per-shell-session overrides, not scoped to any
-particular fleet — that's the operator's own responsibility (e.g. via
-per-repo direnv) if they want to keep them separate. Backends 4-5 are
-scoped by **name**: `fleet.yaml` requires a `name:` field, and
-every fleet gets its own — two fleets with different names never share
-a passphrase, an ssh-agent-derived key, or even an unlocked-cache
-window, on the same machine or not. Manage `acme-fleet` and
-`acme2-fleet` side by side and each has a genuinely separate vault;
-compromising one's ciphertext, or catching one mid-unlock, never
-exposes the other. See `internal/vault`'s package doc for the full
-design rationale.
+incus-sync implements neither var itself: it reads whichever is set
+and hands the bytes to the sops library. There is no third mechanism —
+every secret-manager integration is an **age plugin identity** in the
+file above, never an incus-sync feature.
 
-None of the six backends are mutually exclusive with the others being
-*available* — they're tried in order per invocation, so you can mix: an
-operator using 1Password on their laptop, a CI runner using
-`INCUS_SYNC_AGE_KEY_CMD` against a secrets manager, and a bastion host
-using the SSH-agent vault, all against the same encrypted fleet repo.
+#### What goes in the identity file
 
-**Threat model** (see `internal/vault/vault.go` for the full writeup):
-this defends against a stolen laptop/backup, a compromised dependency
-in your shell environment, or leaked ciphertext — not against a live
-attacker already inside your shell with ptrace/mem access to a process
-holding the decrypted key. That's a "don't get pwned" layer, not a hard
-security boundary.
+An age identity file can hold one or more lines, each either:
 
-`incus-sync vault status` shows which backend is active and whether the
-cache is expired. `incus-sync vault lock` shreds the runtime cache
-immediately.
+- A **plain age private key** (`AGE-SECRET-KEY-1...`) — simplest,
+  zero extra tooling, but it's a bearer credential sitting on disk.
+- An **age plugin identity** (`AGE-PLUGIN-<NAME>-1...`) — hardware-,
+  agent-, or secret-manager-backed, zero key material at rest. SOPS
+  itself resolves these transparently (via `filippo.io/age`'s plugin
+  support, vendored since sops v3.8+): it shells out to the matching
+  `age-plugin-<name>` binary on PATH. incus-sync needs no
+  plugin-specific code to support any of them — it just hands the
+  file's bytes to SOPS unexamined.
+
+Multiple lines in one identity file, or several people each with their
+own plugin-derived identity, both work the same way SOPS has always
+supported multiple recipients — see below.
+
+#### Which plugin to use
+
+incus-sync has no opinion and no list — that's deliberate. Plugins
+exist for hardware tokens, ssh-agents, and various secret managers;
+search `age-plugin-<your tool>` for what's out there, pin whichever
+one you choose to a specific version (or your own audited fork) the
+same way you would any other dependency with access to a decryption
+key, and point `SOPS_AGE_KEY_FILE` at the identity it produces. If
+nothing exists yet for your tool, the [age plugin
+protocol](https://github.com/C2SP/C2SP/blob/main/age-plugin.md) is
+small and documented — writing one is on you, not incus-sync, and
+incus-sync will use it exactly like any other identity the moment
+SOPS can resolve it.
+
+#### Multiple recipients: SOPS/age's own mechanism, not incus-sync's
+
+Every recipient (person, machine, backup key) is one age **public**
+key listed in `.sops.yaml`'s `keys:`, wrapped for a file's data key
+the same way for all of them — this is native SOPS/age behavior,
+unrelated to which backend above supplied any one recipient's private
+half. incus-sync adds a thin, auditable convenience layer on top,
+since hand-editing `.sops.yaml` and remembering to `sops updatekeys`
+every affected file is an easy way to make a silent mistake:
+
+```sh
+# See who can currently decrypt what.
+incus-sync vault list-recipients
+
+# Add a recipient (label it — the anchor name IS the label) and
+# re-wrap every already-encrypted file the matching creation_rule(s)
+# cover, in one step:
+incus-sync vault add-recipient ahall_laptop age1u2fys28ye... \
+    --comment "ahall's laptop key"
+
+# Remove one — re-wraps remaining recipients, which is what makes
+# this real revocation rather than just deleting a line:
+incus-sync vault remove-recipient ahall_laptop
+```
+
+Both commands refuse to leave any `creation_rule` with zero
+recipients (that would make its files permanently undecryptable, not
+revoke access), and print a reminder to commit `.sops.yaml` plus every
+re-wrapped file — none of it takes effect for anyone else's clone
+until that lands.
+
+These commands hold no secret material and perform no cryptography of
+their own — they edit YAML and shell out to `sops updatekeys`, the
+same operation you'd otherwise run by hand.
+
+`incus-sync vault status` shows which of the four backends above is
+currently resolvable.
 
 ## Safety posture
 
@@ -287,7 +313,7 @@ Warnings do not fail validate — they surface so reviewers see them.
 | Apply log at `~/.local/state/incus-sync/apply-*.log` | Every `sync --apply` writes one | JSONL; grep with `jq` for `apply_error` events |
 | `no /var/lib/incus/unix.socket` | Incus daemon down | `rc-service incusd status` (Alpine) or `systemctl status incus` |
 | `instance %q created but provisioning failed` | `provision.after` command exited non-zero | `incus console --show-log <name>`; fix the command or file content, then delete container and re-sync |
-| `passphrase prompt required but no TTY handler bound` | Vault needs unlocking but running non-interactively | Set `INCUS_SYNC_AGE_KEY_CMD`/`SOPS_AGE_KEY`, or run `incus-sync doctor --host <h>` interactively first |
+| `no age key resolvable` | Neither `SOPS_AGE_KEY` nor `SOPS_AGE_KEY_FILE` is set | Set one — see [Auth](#auth) |
 
 ## Persistent apply log
 

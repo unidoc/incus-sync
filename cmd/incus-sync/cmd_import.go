@@ -72,7 +72,7 @@ to pull those definitions in as well.`,
 			}
 			project = proj
 			srv = srv.UseProject(project)
-			fleet, err := config.Load(configDir, host)
+			fleet, err := config.Load(fleetPath, host)
 			if err != nil {
 				return err
 			}
@@ -94,7 +94,7 @@ func runImport(srv incusServer, fleet *config.Fleet, host, name string, force bo
 	}
 	obj := model.InstanceFromAPI(*live)
 
-	instDir := filepath.Join(configDir, "hosts", host, "instances", name)
+	instDir := filepath.Join(fleetPath, "hosts", host, "instances", name)
 	path := filepath.Join(instDir, "instance.yaml")
 	if _, err := os.Stat(path); err == nil && !force {
 		return fmt.Errorf("%s already exists — pass --force to overwrite", path)

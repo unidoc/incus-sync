@@ -1,13 +1,13 @@
 // incus-sync — declarative management for a fleet of Incus hosts.
 //
-// The tool operates on a config repository laid out as:
+// The tool operates on a fleet repo laid out as:
 //
 //	shared/           # objects applied to every host (address sets, ACLs)
 //	hosts/<name>/     # host-specific extensions
 //
-// The config repository lives separately from this tool. Point at it with
-// --config-dir <path>, the INCUS_SYNC_FLEET_PATH env var, or run the tool
-// from within the config repo (default: current directory).
+// The fleet repo lives separately from this tool. Point at it with
+// --fleet-path <path>, the INCUS_SYNC_FLEET_PATH env var, or run the tool
+// from within the fleet repo (default: current directory).
 //
 // The tool reconciles YAML state to the local Incus daemon via unix socket.
 // Read-only commands (validate, render, diff, adopt) are always safe;
@@ -24,12 +24,12 @@ import (
 	"github.com/unidoc/incus-sync/internal/vault"
 )
 
-// configDir is populated from --config-dir / $INCUS_SYNC_FLEET_PATH / cwd.
+// fleetPath is populated from --fleet-path / $INCUS_SYNC_FLEET_PATH / cwd.
 // Subcommands read it after PersistentPreRun resolves the value.
-// configDirSource records how it was resolved (for doctor).
+// fleetPathSource records how it was resolved (for doctor).
 var (
-	configDir       string
-	configDirSource string
+	fleetPath       string
+	fleetPathSource string
 )
 
 // resolveRemoteForHost returns the Remote config to use when talking to
@@ -51,14 +51,10 @@ func resolveRemoteForHost(host string) (*config.Remote, error) {
 	}
 	// LoadRemote will call SOPS, which reads the age key. Make sure
 	// the vault is unlocked (auto-prompts on TTY if missing/expired).
-	meta, err := config.LoadFleetMeta(configDir)
-	if err != nil {
+	if _, err := vault.EnsureUnlocked(); err != nil {
 		return nil, err
 	}
-	if _, err := vault.EnsureUnlocked(meta.Name, promptPassphrase); err != nil {
-		return nil, err
-	}
-	r, err := config.LoadRemote(configDir, host)
+	r, err := config.LoadRemote(fleetPath, host)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +81,7 @@ func resolveProject(flagValue string) (string, error) {
 	if flagValue != "" {
 		return flagValue, nil
 	}
-	meta, err := config.LoadFleetMeta(configDir)
+	meta, err := config.LoadFleetMeta(fleetPath)
 	if err != nil {
 		return "", err
 	}
@@ -116,21 +112,21 @@ func main() {
 		Use:   "incus-sync",
 		Short: "Declarative sync of Incus network objects from a git repo",
 		Long: `incus-sync reconciles Incus network address sets and ACLs
-from a YAML config repository to the local Incus daemon.
+from a YAML fleet repo to the local Incus daemon.
 
-The config repository is resolved in this order:
-  1. --config-dir <path>
+The fleet repo is resolved in this order:
+  1. --fleet-path <path>
   2. $INCUS_SYNC_FLEET_PATH
   3. current working directory`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return resolveConfigDir()
+			return resolveFleetPath()
 		},
 	}
 
-	root.PersistentFlags().StringVar(&configDir, "config-dir", "",
-		"Path to the config repo (default: $INCUS_SYNC_FLEET_PATH or cwd)")
+	root.PersistentFlags().StringVar(&fleetPath, "fleet-path", "",
+		"Path to the fleet repo (default: $INCUS_SYNC_FLEET_PATH or cwd)")
 
 	// Command groups (cobra 1.9+) — help output clusters by purpose so
 	// newcomers see "Setup" and "Read-only" before the write commands.
@@ -171,26 +167,26 @@ The config repository is resolved in this order:
 	}
 }
 
-func resolveConfigDir() error {
-	if configDir != "" {
-		configDirSource = "--config-dir"
+func resolveFleetPath() error {
+	if fleetPath != "" {
+		fleetPathSource = "--fleet-path"
 	} else if v := os.Getenv("INCUS_SYNC_FLEET_PATH"); v != "" {
-		configDir = v
-		configDirSource = "$INCUS_SYNC_FLEET_PATH"
+		fleetPath = v
+		fleetPathSource = "$INCUS_SYNC_FLEET_PATH"
 	} else {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("determine cwd: %w", err)
 		}
-		configDir = cwd
-		configDirSource = "cwd"
+		fleetPath = cwd
+		fleetPathSource = "cwd"
 	}
-	info, err := os.Stat(configDir)
+	info, err := os.Stat(fleetPath)
 	if err != nil {
-		return fmt.Errorf("config dir %q: %w  (set INCUS_SYNC_FLEET_PATH or pass --config-dir)", configDir, err)
+		return fmt.Errorf("fleet path %q: %w  (set INCUS_SYNC_FLEET_PATH or pass --fleet-path)", fleetPath, err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("config dir %q is not a directory", configDir)
+		return fmt.Errorf("fleet path %q is not a directory", fleetPath)
 	}
 	return nil
 }

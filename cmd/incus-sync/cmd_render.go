@@ -34,7 +34,7 @@ through validate.`,
 			if host == "" {
 				return fmt.Errorf("pass --host <name>")
 			}
-			fleet, err := config.Load(configDir, host)
+			fleet, err := config.Load(fleetPath, host)
 			if err != nil {
 				return err
 			}

@@ -49,7 +49,7 @@ overwritten only if they differ.`,
 				return fmt.Errorf("pass --host <name>")
 			}
 			if outDir == "" {
-				outDir = filepath.Join(configDir, "hosts", host)
+				outDir = filepath.Join(fleetPath, "hosts", host)
 			}
 			return runAdopt(host, outDir, socketPath, project)
 		},
@@ -57,7 +57,7 @@ overwritten only if they differ.`,
 
 	cmd.Flags().StringVar(&host, "host", "", "Host name (required); write under hosts/<name>/")
 	_ = cmd.RegisterFlagCompletionFunc("host", hostCompleter)
-	cmd.Flags().StringVar(&outDir, "out", "", "Output directory (default: <config-dir>/hosts/<host>)")
+	cmd.Flags().StringVar(&outDir, "out", "", "Output directory (default: <fleet-path>/hosts/<host>)")
 	cmd.Flags().StringVar(&socketPath, "socket", incus.DefaultSocket, "Incus unix socket path")
 	cmd.Flags().StringVar(&project, "project", "", "Incus project (default: fleet.yaml or `default`) to read from")
 

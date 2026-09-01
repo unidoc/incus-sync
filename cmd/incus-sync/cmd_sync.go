@@ -26,7 +26,7 @@ func syncCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Apply YAML state to Incus (or dry-run)",
-		Long: `Loads the config repo, resolves aliases and policies, then
+		Long: `Loads the fleet repo, resolves aliases and policies, then
 reconciles live Incus state to match. Dry-run by default; pass --apply
 to actually mutate Incus.
 
@@ -43,7 +43,7 @@ Safety:
 				return err
 			}
 
-			fleet, err := config.Load(configDir, host)
+			fleet, err := config.Load(fleetPath, host)
 			if err != nil {
 				return err
 			}
@@ -64,7 +64,7 @@ Safety:
 
 			// Decrypt shared/secrets.sops.yaml once for this sync. Vault
 			// was already unlocked by resolveRemoteForHost via SOPS.
-			if err := fleet.LoadSecretsInto(configDir); err != nil {
+			if err := fleet.LoadSecretsInto(fleetPath); err != nil {
 				return fmt.Errorf("load secrets: %w", err)
 			}
 
@@ -76,7 +76,7 @@ Safety:
 			// Git hygiene: warn if the fleet dir is dirty or behind upstream.
 			// Best-effort — skipped silently if git is unavailable.
 			if apply {
-				gs := gitcheck.Inspect(configDir)
+				gs := gitcheck.Inspect(fleetPath)
 				warnings := gs.Warnings()
 				if len(warnings) > 0 && !dirtyOK {
 					fmt.Fprintln(os.Stderr, "git hygiene:")
@@ -126,7 +126,7 @@ Safety:
 
 			// Acquire an advisory lock on the fleet repo so two concurrent
 			// sync --apply runs serialize instead of interleaving writes.
-			lock, err := statelog.Acquire(configDir, 60*time.Second)
+			lock, err := statelog.Acquire(fleetPath, 60*time.Second)
 			if err != nil {
 				return err
 			}
@@ -160,7 +160,7 @@ Safety:
 	cmd.Flags().StringVar(&project, "project", "", "Incus project (default: fleet.yaml or `default`)")
 	cmd.Flags().BoolVar(&apply, "apply", false, "Actually apply changes (default: dry run)")
 	cmd.Flags().BoolVar(&force, "force", false, "Override refuse-worthy checks (empty ACL/set, widening ingress-default)")
-	cmd.Flags().BoolVar(&dirtyOK, "dirty-ok", false, "Proceed even when config repo is dirty or behind upstream")
+	cmd.Flags().BoolVar(&dirtyOK, "dirty-ok", false, "Proceed even when fleet repo is dirty or behind upstream")
 	return cmd
 }
 
@@ -189,7 +189,7 @@ func checkTargetHost(host string) error {
 	if host == "" {
 		return fmt.Errorf("pass --host <name>")
 	}
-	dir := filepath.Join(configDir, "hosts", host)
+	dir := filepath.Join(fleetPath, "hosts", host)
 	if _, err := os.Stat(dir); err != nil {
 		return fmt.Errorf("host %q: no %s", host, dir)
 	}

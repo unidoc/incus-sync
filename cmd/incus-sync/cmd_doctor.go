@@ -17,9 +17,9 @@ func doctorCmd() *cobra.Command {
 	var deep bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Sanity-check tool + config-repo + Incus reachability",
+		Short: "Sanity-check tool + fleet repo + Incus reachability",
 		Long: `Prints everything the tool would use if you ran sync right now:
-  - config-dir path and how it was resolved
+  - fleet-path and how it was resolved
   - target host (default: short hostname; --host to override)
   - whether hosts/<host>/ exists in the config
   - whether the Incus daemon for <host> is reachable:
@@ -44,10 +44,10 @@ Non-zero exit if any check fails.`,
 func runDoctor(host string, deep bool) error {
 	ok := true
 
-	fmt.Printf("config-dir       %s   (from: %s)\n", configDir, configDirSource)
+	fmt.Printf("fleet-path       %s   (from: %s)\n", fleetPath, fleetPathSource)
 	fmt.Printf("target host      %s\n", host)
 
-	hostDir := filepath.Join(configDir, "hosts", host)
+	hostDir := filepath.Join(fleetPath, "hosts", host)
 	if _, err := os.Stat(hostDir); err == nil {
 		fmt.Printf("hosts/%s/  present\n", host)
 	} else {
@@ -137,7 +137,7 @@ func runDeepChecks(host string) bool {
 	}
 
 	// Verify every project declared in fleet.yaml exists on the host.
-	meta, err := config.LoadFleetMeta(configDir)
+	meta, err := config.LoadFleetMeta(fleetPath)
 	if err != nil {
 		fmt.Printf("fleet.yaml       ERROR: %v\n", err)
 		return false

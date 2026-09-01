@@ -20,25 +20,25 @@ type Status struct {
 	Note        string
 }
 
-// Inspect runs `git` inside configDir and returns a Status. Any error
+// Inspect runs `git` inside fleetPath and returns a Status. Any error
 // short-circuits into Status.Note without a hard failure — the tool
 // treats git as a courtesy, not a requirement.
-func Inspect(configDir string) Status {
-	if !isRepo(configDir) {
+func Inspect(fleetPath string) Status {
+	if !isRepo(fleetPath) {
 		return Status{Note: "not a git repository (skipping git checks)"}
 	}
 	s := Status{IsRepo: true}
 
 	// Dirty check: any uncommitted change including untracked.
-	if out, err := gitCmd(configDir, "status", "--porcelain"); err == nil {
+	if out, err := gitCmd(fleetPath, "status", "--porcelain"); err == nil {
 		if strings.TrimSpace(string(out)) != "" {
 			s.Dirty = true
 		}
 	}
 
 	// Upstream check: only meaningful if a tracking branch is set.
-	if _, err := gitCmd(configDir, "rev-parse", "--abbrev-ref", "@{u}"); err == nil {
-		if out, err := gitCmd(configDir, "rev-list", "--left-right", "--count", "@{u}...HEAD"); err == nil {
+	if _, err := gitCmd(fleetPath, "rev-parse", "--abbrev-ref", "@{u}"); err == nil {
+		if out, err := gitCmd(fleetPath, "rev-list", "--left-right", "--count", "@{u}...HEAD"); err == nil {
 			parts := strings.Fields(strings.TrimSpace(string(out)))
 			if len(parts) == 2 {
 				_, _ = fmt.Sscanf(parts[0], "%d", &s.BehindCount)
@@ -59,16 +59,16 @@ func (s Status) Warnings() []string {
 		return nil
 	}
 	if s.Dirty {
-		out = append(out, "config repo has uncommitted changes (git status --porcelain is non-empty)")
+		out = append(out, "fleet repo has uncommitted changes (git status --porcelain is non-empty)")
 	}
 	if s.BehindCount > 0 {
-		out = append(out, fmt.Sprintf("config repo is %d commit(s) behind upstream — consider `git pull` first", s.BehindCount))
+		out = append(out, fmt.Sprintf("fleet repo is %d commit(s) behind upstream — consider `git pull` first", s.BehindCount))
 	}
 	return out
 }
 
-func isRepo(configDir string) bool {
-	_, err := gitCmd(configDir, "rev-parse", "--is-inside-work-tree")
+func isRepo(fleetPath string) bool {
+	_, err := gitCmd(fleetPath, "rev-parse", "--is-inside-work-tree")
 	return err == nil
 }
 

@@ -61,10 +61,10 @@ type Fleet struct {
 	// so read-only commands don't need the vault unlocked).
 	Secrets map[string]any
 
-	// configDir remembers where the fleet was loaded from, so semantic
+	// fleetPath remembers where the fleet was loaded from, so semantic
 	// validation can cross-check secret path references against the
 	// encrypted secrets file structure without needing a second lookup.
-	configDir string
+	fleetPath string
 
 	origins  map[string]string
 	Warnings []string
@@ -92,10 +92,10 @@ func (s Scope) checkName(kind, name string) error {
 	}
 }
 
-// Load reads all YAML from configDir for the given host, merges,
+// Load reads all YAML from fleetPath for the given host, merges,
 // validates, and returns the resolved fleet state.
-func Load(configDir, host string) (*Fleet, error) {
-	meta, err := LoadFleetMeta(configDir)
+func Load(fleetPath, host string) (*Fleet, error) {
+	meta, err := LoadFleetMeta(fleetPath)
 	if err != nil {
 		return nil, err
 	}
@@ -109,12 +109,12 @@ func Load(configDir, host string) (*Fleet, error) {
 		Instances:      map[string]model.Instance{},
 		Policies:       map[string]model.Policy{},
 		Templates:      map[string]model.Template{},
-		configDir:      configDir,
+		fleetPath:      fleetPath,
 		origins:        map[string]string{},
 	}
 
-	sharedDir := filepath.Join(configDir, "shared")
-	hostDir := filepath.Join(configDir, "hosts", host)
+	sharedDir := filepath.Join(fleetPath, "shared")
+	hostDir := filepath.Join(fleetPath, "hosts", host)
 	if _, err := os.Stat(hostDir); err != nil {
 		return nil, fmt.Errorf("host %q not found: no %s", host, hostDir)
 	}
@@ -141,7 +141,7 @@ func Load(configDir, host string) (*Fleet, error) {
 		{"host acls", func() error { return f.loadACLDir(filepath.Join(hostDir, "acls"), hostScope) }},
 		{"host policies", func() error { return f.loadPolicyDir(filepath.Join(hostDir, "policies"), hostScope) }},
 		{"host instances", func() error { return f.loadInstanceDir(filepath.Join(hostDir, "instances")) }},
-		{"templates", func() error { return f.loadTemplates(filepath.Join(configDir, "templates")) }},
+		{"templates", func() error { return f.loadTemplates(filepath.Join(fleetPath, "templates")) }},
 	}
 
 	for _, step := range steps {
@@ -164,8 +164,8 @@ func Load(configDir, host string) (*Fleet, error) {
 // result to f.Secrets. Requires the vault to be unlocked (SOPS_AGE_KEY
 // populated). Called by sync just before provisioning — read-only
 // commands skip this and pay no SOPS cost.
-func (f *Fleet) LoadSecretsInto(configDir string) error {
-	s, err := LoadSecrets(configDir)
+func (f *Fleet) LoadSecretsInto(fleetPath string) error {
+	s, err := LoadSecrets(fleetPath)
 	if err != nil {
 		return err
 	}
@@ -611,10 +611,10 @@ func (f *Fleet) checkAtRef(ref, where string) error {
 	return nil
 }
 
-// ListHosts returns the sorted list of directories under configDir/hosts/.
+// ListHosts returns the sorted list of directories under fleetPath/hosts/.
 // Public so callers (like `validate` with no --host) can iterate every host.
-func ListHosts(configDir string) ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(configDir, "hosts"))
+func ListHosts(fleetPath string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(fleetPath, "hosts"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
