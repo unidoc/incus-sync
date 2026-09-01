@@ -1,0 +1,5 @@
+template: motd
+description: Drops a login banner naming the on-call contact, pulled from fleet secrets.
+secrets:
+  - env: ADMIN_CONTACT
+    from: admin.contact_email

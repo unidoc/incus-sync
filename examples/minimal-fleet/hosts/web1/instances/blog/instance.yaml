@@ -1,0 +1,20 @@
+# Flat form (the common case — see docs/schema.md). Tagged "web" so
+# shared/policies/web-tier.yaml auto-attaches its ACLs; also explicitly
+# lists a host-scoped ACL, which unions with the policy-attached ones.
+
+instance: blog
+project: default
+description: Public blog (static site).
+original_image: images:alpine/3.24
+tags: [web]
+acls:
+  - web1-internal
+
+ip6: 2001:db8:1::10
+ingress-default: reject
+egress-default: allow
+
+provision:
+  interface: alpine
+  templates:
+    - motd

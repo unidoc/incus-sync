@@ -1,0 +1,23 @@
+# Explicit devices form (multi-NIC — see docs/schema.md). Mutually
+# exclusive with the flat form used by web1/blog. No tags: tag-driven
+# policies only ever attach to eth0, and this instance opts out of the
+# tag system entirely in favor of listing eth0's ACLs directly. eth1
+# (the private storage network) gets no tag-attached ACLs regardless —
+# that's true even with tags set, since policies never touch non-eth0.
+
+instance: postgres
+project: default
+description: Postgres primary. eth0 is reachable for management only; eth1 is the private storage network.
+original_image: images:alpine/3.24
+
+ip6: 2001:db8:1::20
+
+devices:
+  eth0:
+    security.acls:
+      - generic-ssh-management
+    security.acls.default.ingress.action: reject
+    security.acls.default.egress.action: allow
+  eth1:
+    security.acls.default.ingress.action: reject
+    security.acls.default.egress.action: reject

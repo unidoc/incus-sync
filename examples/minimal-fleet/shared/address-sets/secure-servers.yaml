@@ -1,0 +1,6 @@
+name: secure-servers
+description: Hosts allowed to reach management ports (SSH) across the fleet.
+addresses:
+  - "@office"
+  - address: 203.0.113.77
+    comment: bastion jump host

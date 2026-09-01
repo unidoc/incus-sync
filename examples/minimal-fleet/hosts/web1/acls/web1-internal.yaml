@@ -1,0 +1,9 @@
+name: web1-internal
+description: Metrics scrape port, reachable only from other containers on web1.
+ingress:
+  - action: allow
+    protocol: tcp
+    source: $web1-neighbors
+    destination_port: "9000"
+    description: Internal metrics scrape from neighboring containers on web1
+    state: enabled

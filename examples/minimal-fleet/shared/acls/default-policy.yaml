@@ -1,0 +1,11 @@
+name: default-policy
+description: Baseline attached to every managed device — ICMP allowed, everything else per-instance.
+ingress:
+  - action: allow
+    protocol: icmp6
+    description: Allow ICMPv6 (RFC 4890 requirement)
+    state: enabled
+  - action: allow
+    protocol: icmp4
+    description: Allow ICMPv4 (ping, MTU discovery)
+    state: enabled

@@ -1,0 +1,5 @@
+name: web1-neighbors
+description: Other containers on web1 allowed to reach each other's internal ports directly.
+addresses:
+  - 2001:db8:1::10
+  - 2001:db8:1::11
