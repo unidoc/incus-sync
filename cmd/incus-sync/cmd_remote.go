@@ -21,6 +21,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/unidoc/incus-sync/internal/config"
+	"github.com/unidoc/incus-sync/internal/vault"
 )
 
 func remoteCmd() *cobra.Command {
@@ -54,6 +55,18 @@ func remoteListCmd() *cobra.Command {
 			if len(names) == 0 {
 				fmt.Println("(no remotes configured)")
 				return nil
+			}
+			// LoadRemote calls SOPS, which reads the age key. Unlock
+			// once up front (idempotent, cached) rather than let every
+			// remote in the loop below fail with a decrypt error on
+			// the passphrase/ssh-agent backends — matches
+			// resolveRemoteForHost's pattern in main.go.
+			meta, err := config.LoadFleetMeta(configDir)
+			if err != nil {
+				return err
+			}
+			if _, err := vault.EnsureUnlocked(meta.Name, promptPassphrase); err != nil {
+				return err
 			}
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(tw, "NAME\tURL\tFINGERPRINT")

@@ -1,8 +1,6 @@
 package config
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -86,17 +84,6 @@ func LoadRemote(configDir, host string) (*Remote, error) {
 	r.ServerFingerprint = strings.ReplaceAll(r.ServerFingerprint, ":", "")
 
 	return &r, nil
-}
-
-// FingerprintPEM returns the SHA256 fingerprint of a PEM-encoded X.509
-// certificate, formatted as lowercase hex (no colons). Used by the
-// bootstrap flow to record the server's fingerprint into remote.sops.yaml.
-func FingerprintPEM(pemBytes []byte) string {
-	// The Incus API returns server certs as raw PEM; compute the
-	// fingerprint of the DER inside. This matches what `incus info
-	// <remote>` prints, so an operator can eyeball-verify.
-	sum := sha256.Sum256(pemBytes)
-	return hex.EncodeToString(sum[:])
 }
 
 // ListRemotes returns every host under configDir/hosts/ that has a

@@ -300,6 +300,23 @@ func (f *Fleet) validateInstances() error {
 			if _, err := netip.ParseAddr(inst.IP4); err != nil {
 				return fmt.Errorf("instance %q: invalid ip4 %q", name, inst.IP4)
 			}
+			// Static IPv4 needs a prefix length and gateway to actually
+			// work once rendered into the container's network config —
+			// unlike ip6, there's no safe default to guess (subnet size
+			// varies per deployment). Require both explicitly rather
+			// than emit a static address with no netmask.
+			if inst.IP4PrefixLength == 0 {
+				return fmt.Errorf("instance %q: ip4 set but ip4_prefix_length is missing (required — no safe default for IPv4)", name)
+			}
+			if inst.IP4PrefixLength < 0 || inst.IP4PrefixLength > 32 {
+				return fmt.Errorf("instance %q: ip4_prefix_length %d out of range (0-32)", name, inst.IP4PrefixLength)
+			}
+			if inst.IP4Gateway == "" {
+				return fmt.Errorf("instance %q: ip4 set but ip4_gateway is missing (required — no safe default for IPv4)", name)
+			}
+			if _, err := netip.ParseAddr(inst.IP4Gateway); err != nil {
+				return fmt.Errorf("instance %q: invalid ip4_gateway %q", name, inst.IP4Gateway)
+			}
 		}
 		if inst.IP6 != "" {
 			if _, err := netip.ParseAddr(inst.IP6); err != nil {

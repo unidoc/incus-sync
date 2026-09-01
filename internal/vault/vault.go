@@ -57,6 +57,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -92,17 +93,27 @@ const (
 	EnvOnePasswordRef = "INCUS_SYNC_AGE_1PASSWORD_REF"
 )
 
-// validName rejects anything that isn't a safe path component — this
-// runs even when the name came from a trusted fleet.yaml (already
+// vaultNameRe matches config's checkBaseName rule (lowercase letters,
+// digits, hyphens; starts with a letter; no leading/trailing/consecutive
+// hyphens). Duplicated here rather than imported — this package must
+// not depend on internal/config — but kept in sync deliberately.
+var vaultNameRe = regexp.MustCompile(`^[a-z]([a-z0-9]+(-[a-z0-9]+)*)?$`)
+
+// validName rejects anything that isn't a plain, predictable token —
+// this runs even when the name came from a trusted fleet.yaml (already
 // checked against config's stricter naming rules), because these
 // functions are also reachable directly via `--vault <name>` on the
-// CLI, bypassing that check.
+// CLI, bypassing that check. Deliberately as strict as fleet.yaml's own
+// rule, not just "no path traversal": cachePath/VaultPath build a shell
+// command line (scheduleAutoShred) from a name-derived path, so
+// anything beyond [a-z0-9-] is rejected outright rather than trusted to
+// be shell-safe.
 func validName(name string) error {
 	if name == "" {
 		return fmt.Errorf("vault name is empty")
 	}
-	if strings.ContainsAny(name, "/\\") || name == "." || name == ".." {
-		return fmt.Errorf("vault name %q is not a safe path component", name)
+	if len(name) > 60 || !vaultNameRe.MatchString(name) {
+		return fmt.Errorf("vault name %q must match [a-z][a-z0-9-]*, start with a letter, no consecutive/trailing hyphens, max 60 chars", name)
 	}
 	return nil
 }
@@ -507,11 +518,15 @@ func shellEscape(s string) string {
 // shreds the cache. Best-effort — if the process is killed, the
 // TTL check on next use still refuses stale material.
 func scheduleAutoShred(cache, sidecar string, ttl time.Duration) {
-	script := fmt.Sprintf(
-		"sleep %d; shred -u %q %q 2>/dev/null || rm -f %q %q",
-		int(ttl.Seconds()), cache, sidecar, cache, sidecar,
-	)
-	cmd := exec.Command("sh", "-c", script)
+	// cache/sidecar are passed as positional args ($1/$2), never
+	// interpolated into the script text — sh -c's double-quoted %q
+	// form does NOT stop $(...) / `...` from being interpreted by the
+	// shell, so a name-derived path containing either would otherwise
+	// be a command-injection vector reachable via `--vault <name>`.
+	// validName() already rejects such names, but this is the belt to
+	// its suspenders: correct even if that check ever regresses.
+	const script = `sleep "$1"; shred -u "$2" "$3" 2>/dev/null || rm -f "$2" "$3"`
+	cmd := exec.Command("sh", "-c", script, "sh", strconv.Itoa(int(ttl.Seconds())), cache, sidecar)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdin = nil
 	cmd.Stdout = nil

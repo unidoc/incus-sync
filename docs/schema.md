@@ -167,7 +167,9 @@ tags: [<tag>...]                   # match tag-based policies
 start: true | false                # optional; default true on first create
 
 # eth0 device — all fields optional
-ip4: <IPv4 address>
+ip4: <IPv4 address>                # if set, ip4_prefix_length + ip4_gateway are REQUIRED
+ip4_prefix_length: <int>           # no safe default — IPv4 subnet size varies per deployment
+ip4_gateway: <IPv4 address>
 ip6: <IPv6 address>
 acls:                              # attached ACL names (union with policy-attached)
   - <acl-name>

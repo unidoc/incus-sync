@@ -51,6 +51,13 @@ type Instance struct {
 	// Flat eth0 form.
 	IP4 string `yaml:"ip4,omitempty"`
 	IP6 string `yaml:"ip6,omitempty"`
+	// IP4PrefixLength and IP4Gateway are REQUIRED whenever ip4 is set.
+	// Unlike IPv6 there is no universal per-tenant subnet-size
+	// convention to default from, so guessing one would silently
+	// misconfigure the container's network instead of failing loudly —
+	// validate rejects ip4: without both. See validateInstances.
+	IP4PrefixLength int    `yaml:"ip4_prefix_length,omitempty"`
+	IP4Gateway      string `yaml:"ip4_gateway,omitempty"`
 	// IP6PrefixLength defaults to 80 at render time (a common convention
 	// are /80). Override only for non-standard networks.
 	IP6PrefixLength int `yaml:"ip6_prefix_length,omitempty"`

@@ -64,6 +64,40 @@ func TestDiffDeviceKeysOnlyManaged(t *testing.T) {
 	}
 }
 
+// TestDiffDeviceKeysDetectsRemoval guards the bug found in code
+// review: a managed key present in live but absent from want (the
+// fleet file stopped declaring it) must show up as a removal, not be
+// silently skipped because the old loop only ever walked want's keys.
+func TestDiffDeviceKeysDetectsRemoval(t *testing.T) {
+	live := map[string]string{
+		"security.acls": "a,b",
+		"parent":        "br0", // unmanaged — must not show up even as a removal
+	}
+	want := map[string]string{} // fleet file no longer declares any managed key
+	deltas := diffDeviceKeys(live, want)
+	if len(deltas) != 1 {
+		t.Fatalf("expected 1 diff (the removal), got %d: %v", len(deltas), deltas)
+	}
+	if deltas[0] != `security.acls: "a,b" → (unset)` {
+		t.Errorf("unexpected removal message: %q", deltas[0])
+	}
+}
+
+func TestUnsetDeviceKeys(t *testing.T) {
+	live := map[string]string{
+		"security.acls":                        "a,b",
+		"security.acls.default.ingress.action": "reject",
+		"parent":                               "br0", // unmanaged
+	}
+	want := map[string]string{
+		"security.acls.default.ingress.action": "reject", // unchanged, still wanted
+	}
+	got := unsetDeviceKeys(live, want)
+	if len(got) != 1 || got[0] != "security.acls" {
+		t.Errorf("expected exactly [\"security.acls\"] to unset, got %v", got)
+	}
+}
+
 func TestRuleSetDiffAddedRemoved(t *testing.T) {
 	live := []api.NetworkACLRule{
 		{Action: "allow", Protocol: "tcp", DestinationPort: "80"},

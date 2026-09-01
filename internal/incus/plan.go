@@ -658,6 +658,20 @@ func planInstances(p *Plan, fleet *config.Fleet, live []api.Instance) {
 		}
 
 		effectiveDevs := desired.EffectiveDevices()
+		if effectiveDevs == nil && len(desired.Devices) == 0 {
+			// Flat form with nothing declared (no acls, no
+			// ingress/egress-default). EffectiveDevices() returns nil
+			// here for the CREATE path's benefit — "don't set any
+			// device override on a brand-new container" — but for an
+			// EXISTING instance that nil must not mean "leave eth0
+			// alone forever": if the operator just emptied a
+			// previously-populated acls: block, eth0 still needs to be
+			// diffed against an empty want so the removal is detected
+			// and the "loses all ACLs" danger gate below can fire,
+			// instead of the whole instance silently vanishing from
+			// the plan.
+			effectiveDevs = map[string]*model.InstanceDevice{"eth0": {}}
+		}
 		for _, devName := range sortedKeys(effectiveDevs) {
 			dev := effectiveDevs[devName]
 			if dev == nil {
@@ -695,12 +709,13 @@ func planInstances(p *Plan, fleet *config.Fleet, live []api.Instance) {
 				dangers = append(dangers,
 					"removes all attached ACLs — device falls back to ingress-default only. sync --apply refuses without --force.")
 			}
+			unset := unsetDeviceKeys(liveDev, wantMap)
 			p.Entries = append(p.Entries, PlanEntry{
 				Kind: "instance-device", Name: name + "." + devName,
 				Action:     ActionUpdate,
 				Details:    deltas,
 				Dangers:    dangers,
-				execUpdate: updateInstanceDevice(name, devName, wantMap),
+				execUpdate: updateInstanceDevice(name, devName, wantMap, unset),
 			})
 		}
 	}
@@ -905,22 +920,72 @@ func deviceFromInstance(inst api.Instance, devName string) map[string]string {
 	return nil
 }
 
-// diffDeviceKeys returns human-readable diffs for the keys we manage
-// (present in want). Extra keys in live are ignored — those are not ours.
+// managedKeyUniverse returns every key diffDeviceKeys and
+// unsetDeviceKeys need to consider: everything in want, plus every key
+// this tool ever manages (model.ManagedDeviceKeys()). Without the
+// latter, a managed key that's present in live but absent from want
+// (an operator removed it from the fleet file) is invisible to the
+// diff — sortedKeys(want) alone only ever sees keys the fleet still
+// wants, never ones it stopped wanting.
+func managedKeyUniverse(want map[string]string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(k string) {
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	for _, k := range model.ManagedDeviceKeys() {
+		add(k)
+	}
+	for k := range want {
+		add(k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// diffDeviceKeys returns human-readable diffs for every managed key:
+// value changes, new keys, AND managed keys present in live but
+// removed from want (reported as "→ (unset)"). Extra unmanaged keys in
+// live are still ignored — those are not ours regardless.
 func diffDeviceKeys(live, want map[string]string) []string {
 	var out []string
-	for _, k := range sortedKeys(want) {
-		wv := want[k]
-		if lv, ok := live[k]; !ok {
+	for _, k := range managedKeyUniverse(want) {
+		wv, wantHas := want[k]
+		lv, liveHas := live[k]
+		switch {
+		case wantHas && !liveHas:
 			out = append(out, fmt.Sprintf("%s: (unset) → %q", k, wv))
-		} else if lv != wv {
+		case wantHas && liveHas && lv != wv:
 			out = append(out, fmt.Sprintf("%s: %q → %q", k, lv, wv))
+		case !wantHas && liveHas && lv != "":
+			out = append(out, fmt.Sprintf("%s: %q → (unset)", k, lv))
 		}
 	}
 	return out
 }
 
-func updateInstanceDevice(name, devName string, patch map[string]string) func(incusclient.InstanceServer) error {
+// unsetDeviceKeys returns managed keys present in live but no longer
+// wanted. updateInstanceDevice must delete() these from the device map
+// it PATCHes — merely omitting them from patch is not enough, since a
+// stale value already present in inst.Devices[devName] survives
+// untouched otherwise.
+func unsetDeviceKeys(live, want map[string]string) []string {
+	var out []string
+	for _, k := range managedKeyUniverse(want) {
+		if _, wantHas := want[k]; wantHas {
+			continue
+		}
+		if lv, liveHas := live[k]; liveHas && lv != "" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func updateInstanceDevice(name, devName string, patch map[string]string, unset []string) func(incusclient.InstanceServer) error {
 	return func(srv incusclient.InstanceServer) error {
 		inst, etag, err := srv.GetInstance(name)
 		if err != nil {
@@ -952,6 +1017,9 @@ func updateInstanceDevice(name, devName string, patch map[string]string) func(in
 					dev["parent"] = v
 				}
 			}
+		}
+		for _, k := range unset {
+			delete(dev, k)
 		}
 		for k, v := range patch {
 			dev[k] = v

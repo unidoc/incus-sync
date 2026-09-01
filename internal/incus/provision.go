@@ -269,6 +269,20 @@ func pushTemplateFilesTar(srv incusclient.InstanceServer, instance, filesDir str
 		if err != nil {
 			return err
 		}
+		// WalkDir uses Lstat semantics — a symlink shows up as itself,
+		// not its target. tar.FileInfoHeader's second arg (the link
+		// target) is required for a symlink entry to mean anything; we
+		// don't have a sensible one to give it (a git-committed
+		// symlink's target is host-relative, not container-relative),
+		// so a symlink here would tar up as TypeSymlink with an empty
+		// Linkname — broken on extraction, and not obviously so.
+		// files/ trees are meant to be plain config, not symlink farms;
+		// reject rather than guess.
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("%s: symlinks are not supported under files/ (found %s) — "+
+				"use before.sh/after.sh to create one inside the container instead",
+				filesDir, rel)
+		}
 		hdr, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err
@@ -452,11 +466,15 @@ func renderInterfaceTemplate(kind string, inst model.Instance) (provisionFile, e
 	}
 	data := struct {
 		IP4       string
+		IP4Prefix int
+		IP4GW     string
 		IP6       string
 		IP6Prefix int
 		IP6GW     string
 	}{
 		IP4:       strings.TrimSpace(inst.IP4),
+		IP4Prefix: inst.IP4PrefixLength,
+		IP4GW:     strings.TrimSpace(inst.IP4Gateway),
 		IP6:       ip6,
 		IP6Prefix: prefix,
 		IP6GW:     gateway,
@@ -519,7 +537,8 @@ func init() {
 		tpl: `auto eth0
 {{- if .IP4}}
 iface eth0 inet static
-    address {{.IP4}}
+    address {{.IP4}}/{{.IP4Prefix}}
+    gateway {{.IP4GW}}
 {{- else}}
 iface eth0 inet dhcp
 {{- end}}
@@ -542,7 +561,8 @@ hostname $(hostname)
 		tpl: `auto eth0
 {{- if .IP4}}
 iface eth0 inet static
-    address {{.IP4}}
+    address {{.IP4}}/{{.IP4Prefix}}
+    gateway {{.IP4GW}}
 {{- else}}
 iface eth0 inet dhcp
 {{- end}}
@@ -569,7 +589,8 @@ Name=eth0
 DHCP=ipv4
 {{- end}}
 {{- if .IP4}}
-Address={{.IP4}}
+Address={{.IP4}}/{{.IP4Prefix}}
+Gateway={{.IP4GW}}
 {{- end}}
 {{- if .IP6}}
 Address={{.IP6}}/{{.IP6Prefix}}
