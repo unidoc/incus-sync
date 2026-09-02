@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -171,6 +172,122 @@ func TestSopsPolicyAddRecipientRejectsBadPubkey(t *testing.T) {
 	}
 }
 
+func TestSopsPolicyAddRecipientRejectsDuplicatePubkeyUnderNewAnchor(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, fixturePolicy)
+	p, err := LoadSopsPolicy(dir)
+	if err != nil {
+		t.Fatalf("LoadSopsPolicy: %v", err)
+	}
+	existingPubkey := "age1eeun8x8xcetyknpx44a92vnf5tn9m7ukf5w8ex65xckyjuyenakqfvzztm"
+	if err := p.AddRecipient("second_anchor", existingPubkey, "", AddRecipientOptions{}); err == nil {
+		t.Fatal("expected error adding a pubkey that's already present under a different anchor")
+	}
+}
+
+func TestSopsPolicyAddRecipientNoCreationRules(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, `keys:
+  - &atljump age1eeun8x8xcetyknpx44a92vnf5tn9m7ukf5w8ex65xckyjuyenakqfvzztm
+`)
+	p, err := LoadSopsPolicy(dir)
+	if err != nil {
+		t.Fatalf("LoadSopsPolicy: %v", err)
+	}
+	newKey := "age1u2fys28yezr6l0mh4ptuh2np5wl6zvu0en4ad4mx4tk59gy94a8q42qtfc"
+	if err := p.AddRecipient("ahall_laptop", newKey, "", AddRecipientOptions{}); err == nil {
+		t.Fatal("expected error adding a recipient with zero creation_rules to attach to")
+	}
+	if len(p.ListRecipients()) != 1 {
+		t.Fatal("policy was mutated despite the refused add")
+	}
+}
+
+func TestSopsPolicyAddRecipientRuleWithNoAgeList(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, `keys:
+  - &atljump age1eeun8x8xcetyknpx44a92vnf5tn9m7ukf5w8ex65xckyjuyenakqfvzztm
+
+creation_rules:
+  - path_regex: no-key-groups\.yaml$
+    key_groups: []
+`)
+	p, err := LoadSopsPolicy(dir)
+	if err != nil {
+		t.Fatalf("LoadSopsPolicy: %v", err)
+	}
+	newKey := "age1u2fys28yezr6l0mh4ptuh2np5wl6zvu0en4ad4mx4tk59gy94a8q42qtfc"
+	if err := p.AddRecipient("ahall_laptop", newKey, "", AddRecipientOptions{}); err == nil {
+		t.Fatal("expected error when the only creation_rule has no key_groups[].age list")
+	}
+}
+
+// TestSopsPolicyAddRecipientRejectsUnmatchedRuleFilter covers a typo'd
+// --rule value: previously this was silently ignored as long as at
+// least one OTHER --rule value matched something.
+func TestSopsPolicyAddRecipientRejectsUnmatchedRuleFilter(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, fixturePolicy)
+	p, err := LoadSopsPolicy(dir)
+	if err != nil {
+		t.Fatalf("LoadSopsPolicy: %v", err)
+	}
+	newKey := "age1u2fys28yezr6l0mh4ptuh2np5wl6zvu0en4ad4mx4tk59gy94a8q42qtfc"
+	opts := AddRecipientOptions{Rules: []string{`hosts/.*/remote\.sops\.yaml$`, "this-matches-nothing"}}
+	if err := p.AddRecipient("ahall_laptop", newKey, "", opts); err == nil {
+		t.Fatal("expected error when one of several --rule values matches no creation_rule")
+	}
+	// Confirm nothing was mutated — the one real match must not have
+	// been applied just because the typo'd one was silently dropped.
+	if len(p.ListRecipients()) != 1 {
+		t.Fatalf("policy was mutated despite the refused add: %+v", p.ListRecipients())
+	}
+	for _, rule := range p.creationRules() {
+		for _, ageList := range ageListsIn(rule.node) {
+			if len(ageList.Content) != 1 {
+				t.Errorf("rule %q age list has %d entries after refused add, want 1", rule.pathRegex, len(ageList.Content))
+			}
+		}
+	}
+}
+
+// TestSopsPolicyAddRecipientAtomicOnFailure is AddRecipient's
+// counterpart to TestSopsPolicyRemoveRecipientRefusesLastOne: a
+// multi-rule add where a LATER rule fails validation must not leave
+// an EARLIER rule (or the keys: list) partially mutated.
+func TestSopsPolicyAddRecipientAtomicOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	// Second rule has no key_groups[].age — AddRecipient's default
+	// (no --rule filter, i.e. "every rule") must fail on it, and must
+	// not have already mutated the first rule or keys: by that point.
+	writeFixture(t, dir, `keys:
+  - &atljump age1eeun8x8xcetyknpx44a92vnf5tn9m7ukf5w8ex65xckyjuyenakqfvzztm
+
+creation_rules:
+  - path_regex: hosts/.*/remote\.sops\.yaml$
+    key_groups:
+      - age:
+          - *atljump
+  - path_regex: no-key-groups\.yaml$
+    key_groups: []
+`)
+	p, err := LoadSopsPolicy(dir)
+	if err != nil {
+		t.Fatalf("LoadSopsPolicy: %v", err)
+	}
+	newKey := "age1u2fys28yezr6l0mh4ptuh2np5wl6zvu0en4ad4mx4tk59gy94a8q42qtfc"
+	if err := p.AddRecipient("ahall_laptop", newKey, "", AddRecipientOptions{}); err == nil {
+		t.Fatal("expected error — second rule has no key_groups[].age")
+	}
+	if len(p.ListRecipients()) != 1 {
+		t.Fatalf("keys: was mutated despite the refused add: %+v", p.ListRecipients())
+	}
+	rules := p.creationRules()
+	if len(ageListsIn(rules[0].node)[0].Content) != 1 {
+		t.Error("first rule's age list was mutated despite the second rule failing validation")
+	}
+}
+
 func TestSopsPolicyRemoveRecipient(t *testing.T) {
 	dir := t.TempDir()
 	writeFixture(t, dir, fixturePolicy)
@@ -286,5 +403,195 @@ func TestAffectedFiles(t *testing.T) {
 	}
 	if len(got) != 1 || got[0] != filepath.FromSlash("hosts/web1/remote.sops.yaml") {
 		t.Fatalf("got %v, want exactly [hosts/web1/remote.sops.yaml] (web2 unencrypted, fleet.yaml unmatched)", got)
+	}
+}
+
+// TestSopsPolicySavePreservesConventionalStyle guards against Save()
+// regressing to yaml.Marshal's 4-space-indent, no-document-marker
+// default, which would turn every real edit into a full-file
+// reformat diff on top of the actual change. Blank-line preservation
+// is NOT covered here — that's a documented yaml.v3 limitation Save's
+// doc comment accepts, not something this test can hold the line on.
+func TestSopsPolicySavePreservesConventionalStyle(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, fixturePolicy) // starts with "---", 2-space indent
+	p, err := LoadSopsPolicy(dir)
+	if err != nil {
+		t.Fatalf("LoadSopsPolicy: %v", err)
+	}
+	if err := p.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, SopsPolicyFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(raw), "---") {
+		t.Errorf("Save() dropped the leading --- document marker:\n%s", raw)
+	}
+	// Check the indent of the line directly under "keys:" — the first
+	// nesting level, so its indent is unambiguous regardless of how
+	// deep other structures nest.
+	idx := strings.Index(string(raw), "keys:\n")
+	if idx < 0 {
+		t.Fatalf("no keys: line found:\n%s", raw)
+	}
+	rest := string(raw)[idx+len("keys:\n"):]
+	nextLine := strings.SplitN(rest, "\n", 2)[0]
+	if strings.HasPrefix(nextLine, "    ") {
+		t.Errorf("Save() used 4-space indent (yaml.Marshal's default) instead of the source's 2-space convention: %q", nextLine)
+	}
+	if !strings.HasPrefix(nextLine, "  ") || strings.HasPrefix(nextLine, "   ") {
+		t.Errorf("expected exactly 2-space indent under keys:, got %q", nextLine)
+	}
+}
+
+// fixtureLiteralPolicy has "alice" wired into her rule as a literal
+// pubkey copy, not a `*alice` alias — the exact shape review finding
+// F1 identified as invisible to ListRecipients/RemoveRecipient. "bob"
+// is aliased normally, as a control.
+const fixtureLiteralPolicy = `keys:
+  - &bob age1u2fys28yezr6l0mh4ptuh2np5wl6zvu0en4ad4mx4tk59gy94a8q42qtfc
+  - &alice age1eeun8x8xcetyknpx44a92vnf5tn9m7ukf5w8ex65xckyjuyenakqfvzztm
+
+creation_rules:
+  - path_regex: \.sops\.ya?ml$
+    key_groups:
+      - age:
+          - *bob
+          - age1eeun8x8xcetyknpx44a92vnf5tn9m7ukf5w8ex65xckyjuyenakqfvzztm
+`
+
+// TestSopsPolicyListRecipientsResolvesLiteralEntries is F1: a
+// recipient referenced by a literal pubkey copy (not a YAML alias)
+// must still resolve to the rule that references it, exactly like the
+// aliased case does.
+func TestSopsPolicyListRecipientsResolvesLiteralEntries(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, fixtureLiteralPolicy)
+	p, err := LoadSopsPolicy(dir)
+	if err != nil {
+		t.Fatalf("LoadSopsPolicy: %v", err)
+	}
+	recipients := p.ListRecipients()
+	byAnchor := map[string]SopsRecipient{}
+	for _, r := range recipients {
+		byAnchor[r.Anchor] = r
+	}
+	if len(byAnchor["alice"].Rules) != 1 {
+		t.Errorf("alice (literal entry) resolved to %d rules, want 1: %+v", len(byAnchor["alice"].Rules), byAnchor["alice"])
+	}
+	if len(byAnchor["bob"].Rules) != 1 {
+		t.Errorf("bob (aliased control) resolved to %d rules, want 1: %+v", len(byAnchor["bob"].Rules), byAnchor["bob"])
+	}
+}
+
+// TestSopsPolicyRemoveRecipientRemovesLiteralEntry is F1's other half:
+// removing a literally-referenced recipient must actually drop that
+// literal entry and be refused if it's the rule's last recipient —
+// not silently "succeed" while leaving the pubkey fully able to
+// decrypt (and still listed as a recipient for future files).
+func TestSopsPolicyRemoveRecipientRemovesLiteralEntry(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, fixtureLiteralPolicy)
+	p, err := LoadSopsPolicy(dir)
+	if err != nil {
+		t.Fatalf("LoadSopsPolicy: %v", err)
+	}
+	if _, err := p.RemoveRecipient("alice"); err != nil {
+		t.Fatalf("RemoveRecipient(alice): %v", err)
+	}
+	rules := p.creationRules()
+	ageList := ageListsIn(rules[0].node)[0]
+	for _, e := range ageList.Content {
+		if e.Kind == yaml.ScalarNode && e.Value == "age1eeun8x8xcetyknpx44a92vnf5tn9m7ukf5w8ex65xckyjuyenakqfvzztm" {
+			t.Error("alice's literal pubkey entry is still in the age list after removal")
+		}
+	}
+	// bob is now the sole recipient — removing him must be refused.
+	if _, err := p.RemoveRecipient("bob"); err == nil {
+		t.Error("expected error removing bob, now the sole recipient after alice's removal")
+	}
+}
+
+// fixtureShortFormPolicy uses a bare `age:` scalar directly on the
+// creation_rule — the form SOPS's own docs lead with and `sops -e`
+// writes by default — with no `key_groups:` at all. Review finding F2.
+const fixtureShortFormPolicy = `creation_rules:
+  - path_regex: \.sops\.ya?ml$
+    age: age1eeun8x8xcetyknpx44a92vnf5tn9m7ukf5w8ex65xckyjuyenakqfvzztm
+`
+
+func TestSopsPolicyAgeListsInHandlesShortForm(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, fixtureShortFormPolicy)
+	p, err := LoadSopsPolicy(dir)
+	if err != nil {
+		t.Fatalf("LoadSopsPolicy: %v", err)
+	}
+	newKey := "age1u2fys28yezr6l0mh4ptuh2np5wl6zvu0en4ad4mx4tk59gy94a8q42qtfc"
+	if err := p.AddRecipient("second", newKey, "", AddRecipientOptions{}); err != nil {
+		t.Fatalf("AddRecipient against short-form age: %v", err)
+	}
+	recipients := p.ListRecipients()
+	if len(recipients) != 1 || recipients[0].Anchor != "second" {
+		t.Fatalf("got %+v, want exactly [second]", recipients)
+	}
+	if len(recipients[0].Rules) != 1 {
+		t.Errorf("new recipient resolved to %d rules, want 1", len(recipients[0].Rules))
+	}
+}
+
+// TestSopsPolicyAgeListsInHandlesShortFormCommaList covers SOPS's own
+// comma-separated-string convention for multiple recipients in the
+// short form (config.parseKeyField in the vendored sops source).
+func TestSopsPolicyAgeListsInHandlesShortFormCommaList(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, `creation_rules:
+  - path_regex: \.sops\.ya?ml$
+    age: age1eeun8x8xcetyknpx44a92vnf5tn9m7ukf5w8ex65xckyjuyenakqfvzztm, age1u2fys28yezr6l0mh4ptuh2np5wl6zvu0en4ad4mx4tk59gy94a8q42qtfc
+`)
+	p, err := LoadSopsPolicy(dir)
+	if err != nil {
+		t.Fatalf("LoadSopsPolicy: %v", err)
+	}
+	rules := p.creationRules()
+	ageLists := ageListsIn(rules[0].node)
+	if len(ageLists) != 1 || len(ageLists[0].Content) != 2 {
+		t.Fatalf("got %d age lists, want 1 with 2 entries", len(ageLists))
+	}
+	if ageLists[0].Content[0].Kind != yaml.ScalarNode || ageLists[0].Content[1].Kind != yaml.ScalarNode {
+		t.Errorf("comma-split entries should be plain scalars: %+v", ageLists[0].Content)
+	}
+}
+
+// TestSopsPolicyRemoveRecipientRefusesEmptyUnrelatedRule is F6: a
+// creation_rule whose age list is already empty — unrelated to the
+// recipient being removed — must not cause a false "is the only
+// recipient" refusal for THAT recipient's actual, populated rule.
+func TestSopsPolicyRemoveRecipientRefusesEmptyUnrelatedRule(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, `keys:
+  - &alice age1eeun8x8xcetyknpx44a92vnf5tn9m7ukf5w8ex65xckyjuyenakqfvzztm
+  - &bob age1u2fys28yezr6l0mh4ptuh2np5wl6zvu0en4ad4mx4tk59gy94a8q42qtfc
+
+creation_rules:
+  - path_regex: hosts/.*/remote\.sops\.yaml$
+    key_groups:
+      - age:
+          - *alice
+          - *bob
+  - path_regex: unrelated-empty\.yaml$
+    key_groups:
+      - age: []
+`)
+	p, err := LoadSopsPolicy(dir)
+	if err != nil {
+		t.Fatalf("LoadSopsPolicy: %v", err)
+	}
+	// alice has a co-recipient (bob) in her only real rule — must
+	// succeed despite the unrelated rule's already-empty age list.
+	if _, err := p.RemoveRecipient("alice"); err != nil {
+		t.Fatalf("RemoveRecipient(alice): unexpected error (unrelated empty rule should not block this): %v", err)
 	}
 }

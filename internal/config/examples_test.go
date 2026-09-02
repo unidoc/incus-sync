@@ -45,3 +45,30 @@ func TestExampleFleetValidates(t *testing.T) {
 		})
 	}
 }
+
+// TestExampleFleetSopsPolicyIsUsable keeps examples/minimal-fleet/.sops.yaml
+// honest: it exists specifically so `vault list-recipients` /
+// `add-recipient` / `remove-recipient` have something real to run
+// against (README.md's Auth section and docs/schema.md's .sops.yaml
+// section both point here) — this fails if that stops being true.
+func TestExampleFleetSopsPolicyIsUsable(t *testing.T) {
+	dir, err := filepath.Abs(filepath.Join("..", "..", "examples", "minimal-fleet"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := LoadSopsPolicy(dir)
+	if err != nil {
+		t.Fatalf("LoadSopsPolicy(%q): %v", dir, err)
+	}
+	recipients := p.ListRecipients()
+	if len(recipients) == 0 {
+		t.Fatal("examples/minimal-fleet/.sops.yaml declares no recipients")
+	}
+	for _, r := range recipients {
+		if len(r.Rules) == 0 {
+			t.Errorf("recipient %q (anchor %q) resolves to zero creation_rules — "+
+				"list-recipients/remove-recipient would treat it as orphaned",
+				r.PubKey, r.Anchor)
+		}
+	}
+}

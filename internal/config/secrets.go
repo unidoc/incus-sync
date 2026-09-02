@@ -27,8 +27,8 @@ func SecretsPath(fleetPath string) string {
 // Returns an empty map (not nil) if the file does not exist so
 // callers can treat "no secrets" as a valid state.
 //
-// Requires the vault to be unlocked — the caller should have called
-// vault.EnsureUnlocked() first so SOPS_AGE_KEY is populated.
+// Requires an age key backend to be configured (SOPS_AGE_KEY,
+// SOPS_AGE_KEY_FILE, or SOPS_AGE_KEY_CMD) — see vault.EnsureUnlocked.
 func LoadSecrets(fleetPath string) (map[string]any, error) {
 	path := SecretsPath(fleetPath)
 	raw, err := os.ReadFile(path)
@@ -42,11 +42,10 @@ func LoadSecrets(fleetPath string) (map[string]any, error) {
 	// block. Not perfect but avoids requiring SOPS for a plaintext
 	// scaffold during initial `sops <file>` editing.
 	if bytes.Contains(raw, []byte("\nsops:\n")) || bytes.Contains(raw, []byte("sops:\n")) {
-		// Ensure an age key backend is resolved before SOPS decrypt
-		// (populates SOPS_AGE_KEY env). Idempotent: if a remote has
-		// already resolved one in this process, SOPS_AGE_KEY is
-		// already set and this is a no-op env read.
-		if _, err := vault.EnsureUnlocked(); err != nil {
+		// Fail fast with a clear message if no backend is configured
+		// at all, rather than let decrypt.Data's own error speak for
+		// itself further down.
+		if err := vault.EnsureUnlocked(); err != nil {
 			return nil, fmt.Errorf("resolve age key to decrypt %s: %w", path, err)
 		}
 		raw, err = decrypt.Data(raw, "yaml")

@@ -26,10 +26,19 @@ just build
 `explain blog` shows *why* each ACL on `blog` is attached — one comes
 from `acls:` directly, three from the tag-matched `web-tier` policy.
 
+This example also ships a real `.sops.yaml` (see its own header
+comment) — try the recipient-management commands against it directly,
+no daemon or real secrets needed:
+
+```sh
+./bin/incus-sync --fleet-path examples/minimal-fleet vault list-recipients
+```
+
 ## Layout
 
 ```
 fleet.yaml                          # projects: [default]
+.sops.yaml                           # SOPS policy — illustrative, see its own comment
 shared/
 ├── aliases/office.yaml             # @office — office CIDR + admin's IP
 ├── address-sets/secure-servers.yaml # references @office + a literal

@@ -176,18 +176,35 @@ Both `remote.sops.yaml` (per-host TLS client cert/key) and
 `shared/secrets.sops.yaml` (fleet-wide app secrets, e.g. for
 `provision.after` templates) are SOPS-encrypted with AGE. Decrypting
 either requires an AGE private key, which incus-sync resolves from
-exactly two of SOPS's own native env vars — nothing incus-sync-specific,
+exactly three of SOPS's own native env vars — nothing incus-sync-specific,
 no custom hook, no legacy fallback:
 
 1. `SOPS_AGE_KEY` env — the key content itself, already set, used as-is.
 2. `SOPS_AGE_KEY_FILE` env — path to an **identity file**. This is the
    recommended way to point at anything beyond a raw key sitting in an
    env var — see below for what can go in it.
+3. `SOPS_AGE_KEY_CMD` env — a shell command whose stdout is the key.
+   Also SOPS's own native var, not an incus-sync invention — the
+   escape hatch for a secret manager with no age plugin (yet).
 
-incus-sync implements neither var itself: it reads whichever is set
-and hands the bytes to the sops library. There is no third mechanism —
-every secret-manager integration is an **age plugin identity** in the
-file above, never an incus-sync feature.
+incus-sync implements none of these itself: it reads whichever is set
+and hands the bytes (or `SOPS_AGE_KEY_CMD`'s stdout) to the sops
+library. There is no fourth mechanism — beyond these three, every
+secret-manager integration is an **age plugin identity** inside the
+file from #2, never an incus-sync feature.
+
+One honesty note: incus-sync's own pre-check here is *stricter* than
+what actually happens once decryption runs — the vendored sops
+library unconditionally also tries its own default identity file
+(`~/.config/sops/age/keys.txt`) if one exists, regardless of whether
+any of the three vars above are set. That's baked into sops itself,
+not something incus-sync can suppress. incus-sync deliberately does
+not treat that default path as configured on its own — relying on it
+alone gets a clear "no age key resolvable" from `incus-sync`, even
+though a bare `sops -d` would succeed — because failing loud on an
+easy-to-forget implicit file beats silently succeeding via it. Set
+`SOPS_AGE_KEY_FILE` explicitly, even if it points at that same
+conventional path.
 
 #### What goes in the identity file
 
@@ -256,12 +273,16 @@ These commands hold no secret material and perform no cryptography of
 their own — they edit YAML and shell out to `sops updatekeys`, the
 same operation you'd otherwise run by hand.
 
-`incus-sync vault status` shows which of the four backends above is
-currently resolvable.
+`incus-sync vault status` shows which of `SOPS_AGE_KEY` /
+`SOPS_AGE_KEY_FILE` / `SOPS_AGE_KEY_CMD` is currently resolvable.
 
 ## Safety posture
 
-- `sync` is dry-run by default. `--apply` prompts on a TTY unless `--yes`.
+- `sync` is dry-run by default. `--apply` is itself the confirmation —
+  there is no second prompt and no `--yes` flag. `--force` overrides
+  the danger-gated checks (empty ACL/address-set, widening
+  `ingress-default`); `--dirty-ok` overrides the dirty/stale-repo
+  refusal. Review the dry-run output before passing `--apply`.
 - Never deletes objects that exist in Incus but not in the fleet. Prints
   them as "unmanaged". Includes containers with no fleet file.
 - Instance device patches touch only the keys the model marks as managed
@@ -313,7 +334,7 @@ Warnings do not fail validate — they surface so reviewers see them.
 | Apply log at `~/.local/state/incus-sync/apply-*.log` | Every `sync --apply` writes one | JSONL; grep with `jq` for `apply_error` events |
 | `no /var/lib/incus/unix.socket` | Incus daemon down | `rc-service incusd status` (Alpine) or `systemctl status incus` |
 | `instance %q created but provisioning failed` | `provision.after` command exited non-zero | `incus console --show-log <name>`; fix the command or file content, then delete container and re-sync |
-| `no age key resolvable` | Neither `SOPS_AGE_KEY` nor `SOPS_AGE_KEY_FILE` is set | Set one — see [Auth](#auth) |
+| `no age key resolvable` | None of `SOPS_AGE_KEY`/`SOPS_AGE_KEY_FILE`/`SOPS_AGE_KEY_CMD` is set | Set one — see [Auth](#auth) |
 
 ## Persistent apply log
 

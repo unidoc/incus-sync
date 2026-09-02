@@ -60,7 +60,7 @@ func remoteListCmd() *cobra.Command {
 			// it once up front rather than let every remote in the
 			// loop below fail with a decrypt error — matches
 			// resolveRemoteForHost's pattern in main.go.
-			if _, err := vault.EnsureUnlocked(); err != nil {
+			if err := vault.EnsureUnlocked(); err != nil {
 				return err
 			}
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

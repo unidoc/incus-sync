@@ -22,6 +22,54 @@ kept unique across fleets. Secret decryption is scoped entirely by
 see [README.md's Auth section](../README.md#auth) and
 `internal/vault`'s package doc.
 
+## .sops.yaml
+
+One per repo, at the root — SOPS's own encryption policy file, not an
+incus-sync invention. Required for `remote.sops.yaml` and
+`secrets.sops.yaml` to ever get encrypted or re-wrapped; not read by
+`validate`/`render` at all, since those never decrypt anything (see
+[examples/minimal-fleet](../examples/minimal-fleet), which ships a
+`.sops.yaml` you can point the `vault` recipient-management commands
+at directly).
+
+SOPS itself accepts two shapes for a `creation_rule`'s recipients:
+
+```yaml
+# Long form — needed when a rule also uses pgp:/kms: in the same
+# key_groups entry. This is the form `incus-sync vault add-recipient`
+# always writes.
+creation_rules:
+  - path_regex: <regex>
+    key_groups:
+      - age:
+          - <age1...>
+          - <age1...>
+
+# Short form — no key_groups at all. What SOPS's own docs lead with
+# and what `sops -e` writes by default. A comma-separated string is
+# also accepted here (SOPS splits it itself).
+creation_rules:
+  - path_regex: <regex>
+    age: <age1...>
+```
+
+incus-sync's `vault list-recipients` / `add-recipient` /
+`remove-recipient` (see [README.md's Auth
+section](../README.md#auth)) understand both shapes for reading and
+mutating an existing policy, and normalize a short-form comma string
+into a proper list the first time they touch it. They do not
+understand a recipient that is a literal pubkey in some rule's age
+list with **no** corresponding `keys:` entry at all — a valid SOPS
+shape, just not one these commands can name or resolve; edit
+`.sops.yaml` directly for that case.
+
+`keys:` anchors are an incus-sync/operator labeling convention layered
+on top of plain SOPS, not something SOPS itself requires — SOPS is
+equally happy with recipients pasted directly into an age list. Using
+anchors is what lets `list-recipients` show a human-readable label
+next to each pubkey and lets `add-recipient`/`remove-recipient`
+address a recipient by name instead of by pasting its full key back.
+
 ## Six object kinds
 
 - **alias** — `shared/aliases/<name>.yaml`, `hosts/<h>/aliases/<name>.yaml`

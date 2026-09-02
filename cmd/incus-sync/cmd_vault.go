@@ -40,15 +40,18 @@ func vaultCmd() *cobra.Command {
 		Use:   "vault",
 		Short: "Inspect the age/SOPS backend and manage .sops.yaml recipients",
 		Long: `incus-sync decrypts every SOPS-encrypted file (secrets.sops.yaml,
-remote.sops.yaml) using an AGE private key resolved from exactly two
+remote.sops.yaml) using an AGE private key resolved from exactly three
 of SOPS's own native env vars — nothing incus-sync-specific:
 
-  1. SOPS_AGE_KEY       env — the key content itself
-  2. SOPS_AGE_KEY_FILE  env — path to an identity file
+  1. SOPS_AGE_KEY      env — the key content itself
+  2. SOPS_AGE_KEY_FILE env — path to an identity file
+  3. SOPS_AGE_KEY_CMD  env — a command whose stdout is the key
 
-incus-sync implements neither: no custom vault format, no cache, no
-command hook, no legacy fallback. Every secret-manager integration is
-an AGE PLUGIN identity in that file (AGE-PLUGIN-<NAME>-1...), chosen
+incus-sync implements none of these itself: no custom vault format,
+no cache, no incus-sync-specific hook, no bespoke fallback — these
+three are exactly what the vendored sops library already reads.
+Every secret-manager integration is either an AGE PLUGIN identity in
+the file above (AGE-PLUGIN-<NAME>-1...) or a command via #3, chosen
 and trusted entirely by the operator — incus-sync names none, depends
 on none, and needs no plugin-specific code to support any of them.
 SOPS resolves plugin identities natively (shells out to the matching
@@ -92,9 +95,17 @@ func vaultStatusCmd() *cobra.Command {
 				}
 				return nil
 			}
+			if c := os.Getenv("SOPS_AGE_KEY_CMD"); c != "" {
+				fmt.Printf("backend          SOPS_AGE_KEY_CMD env → %q\n", c)
+				return nil
+			}
 			fmt.Println("backend          NONE CONFIGURED")
 			fmt.Println()
-			fmt.Println("Set SOPS_AGE_KEY or SOPS_AGE_KEY_FILE. See README.md's Auth section.")
+			fmt.Println("Set SOPS_AGE_KEY, SOPS_AGE_KEY_FILE, or SOPS_AGE_KEY_CMD. See README.md's Auth section.")
+			fmt.Println()
+			fmt.Println("Note: if none of these are set but ~/.config/sops/age/keys.txt")
+			fmt.Println("exists, a bare `sops -d` may still succeed where incus-sync refuses —")
+			fmt.Println("that implicit default is intentionally not treated as configured here.")
 			return nil
 		},
 	}
@@ -185,21 +196,26 @@ Requires the operator running this to already be a valid recipient
 			}
 			fmt.Printf("Added recipient %s (%s) to %s\n", anchor, pubkey, config.SopsPolicyFilename)
 
-			if len(files) > 0 {
-				if err := runSopsUpdatekeys(files); err != nil {
-					return fmt.Errorf("policy updated, but re-wrapping existing files failed: %w"+
-						"\n(the new recipient can decrypt anything encrypted AFTER this point regardless)", err)
-				}
-				fmt.Printf("Re-wrapped %d existing file(s) for the new recipient:\n", len(files))
-				for _, f := range files {
-					fmt.Printf("  %s\n", f)
-				}
-			} else {
+			if len(files) == 0 {
 				fmt.Println("No already-encrypted files matched — nothing to re-wrap yet.")
+				printCommitReminder(config.SopsPolicyFilename)
+				return nil
 			}
 
-			commitPaths := append([]string{config.SopsPolicyFilename}, files...)
-			printCommitReminder(commitPaths...)
+			res := runSopsUpdatekeys(fleetPath, files)
+			if len(res.Succeeded) > 0 {
+				fmt.Printf("Re-wrapped %d existing file(s) for the new recipient:\n", len(res.Succeeded))
+				for _, f := range res.Succeeded {
+					fmt.Printf("  %s\n", f)
+				}
+			}
+			// Whatever succeeded is a safe, consistent state to persist —
+			// the new recipient just can't decrypt what's left pending.
+			printCommitReminder(append([]string{config.SopsPolicyFilename}, res.Succeeded...)...)
+			if res.FailedErr != nil {
+				return fmt.Errorf("%s\n(the new recipient can already decrypt everything above; "+
+					"re-run this command to retry the rest)", res.summary())
+			}
 			return nil
 		},
 	}
@@ -229,12 +245,23 @@ would make its files permanently undecryptable, not revoke access.`,
 				return err
 			}
 			// Capture affected rules BEFORE removal — RemoveRecipient
-			// drops the alias references we'd otherwise use to find them.
+			// drops the matching entries we'd otherwise use to find them.
 			var affectedRules []string
+			found := false
 			for _, r := range p.ListRecipients() {
 				if r.Anchor == args[0] || r.PubKey == args[0] {
 					affectedRules = r.Rules
+					found = true
 				}
+			}
+			if found && len(affectedRules) == 0 {
+				// In `keys:` but referenced by no creation_rule at all —
+				// either a stale entry or an unsupported policy shape.
+				// Either way it isn't decrypting anything, so "revoked"
+				// would be the wrong thing to report; require an
+				// explicit hand-edit of .sops.yaml instead of guessing.
+				return fmt.Errorf("%q is in .sops.yaml's keys: but is not referenced by any creation_rule — "+
+					"nothing to revoke via re-wrap; if it's a stale entry, remove it from .sops.yaml directly", args[0])
 			}
 			anchor, err := p.RemoveRecipient(args[0])
 			if err != nil {
@@ -249,20 +276,32 @@ would make its files permanently undecryptable, not revoke access.`,
 			}
 			fmt.Printf("Removed recipient %s from %s\n", anchor, config.SopsPolicyFilename)
 
-			if len(files) > 0 {
-				if err := runSopsUpdatekeys(files); err != nil {
-					return fmt.Errorf("policy updated, but re-wrapping existing files failed: %w"+
-						"\n(the removed recipient can still decrypt the OLD ciphertext until this succeeds)", err)
-				}
-				fmt.Printf("Re-wrapped %d existing file(s) — %s can no longer decrypt them:\n", len(files), anchor)
-				for _, f := range files {
-					fmt.Printf("  %s\n", f)
-				}
-			} else {
+			if len(files) == 0 {
 				fmt.Println("No already-encrypted files matched.")
+				printCommitReminder(config.SopsPolicyFilename)
+				return nil
 			}
 
-			commitPaths := append([]string{config.SopsPolicyFilename}, files...)
+			res := runSopsUpdatekeys(fleetPath, files)
+			if len(res.Succeeded) > 0 {
+				fmt.Printf("Re-wrapped %d existing file(s) — %s can no longer decrypt them:\n", len(res.Succeeded), anchor)
+				for _, f := range res.Succeeded {
+					fmt.Printf("  %s\n", f)
+				}
+			}
+			if res.FailedErr != nil {
+				// Do NOT print the commit reminder here: .sops.yaml no
+				// longer lists this recipient, but they can still
+				// decrypt every file that didn't get re-wrapped — a
+				// git log reader would see "removed" and wrongly
+				// assume revocation is complete. Committing now would
+				// misrepresent the real state.
+				return fmt.Errorf("%s\nDo NOT commit yet — %s can still decrypt the file(s) above. "+
+					"Re-run this command to retry, then commit once it fully succeeds.",
+					res.summary(), anchor)
+			}
+
+			commitPaths := append([]string{config.SopsPolicyFilename}, res.Succeeded...)
 			printCommitReminder(commitPaths...)
 			return nil
 		},
@@ -270,23 +309,64 @@ would make its files permanently undecryptable, not revoke access.`,
 	return cmd
 }
 
+// updatekeysResult reports exactly how far runSopsUpdatekeys got —
+// callers need this to tell an operator precisely which files are
+// still in the OLD recipient state after a partial failure, not just
+// "it failed somewhere."
+type updatekeysResult struct {
+	Succeeded    []string
+	Failed       string // the one file that errored, "" if none did
+	FailedErr    error
+	NotAttempted []string // files after the failure, never even tried
+}
+
+// summary renders the failure detail for an error message. Only
+// meaningful when FailedErr != nil.
+func (r updatekeysResult) summary() string {
+	msg := fmt.Sprintf("re-wrapping failed: %v", r.FailedErr)
+	if r.Failed != "" {
+		msg += fmt.Sprintf("\n  FAILED:        %s", r.Failed)
+	}
+	if len(r.NotAttempted) > 0 {
+		msg += fmt.Sprintf("\n  NOT ATTEMPTED: %s", strings.Join(r.NotAttempted, ", "))
+	}
+	return msg
+}
+
 // runSopsUpdatekeys shells out to the real sops binary — sops has no
 // library-level "re-wrap in place" call worth depending on for this,
 // and doing it via the CLI is the exact same operation an operator
-// would run by hand, just automated over every affected file.
-func runSopsUpdatekeys(relFiles []string) error {
+// would run by hand, just automated over every affected file. Stops
+// at the first failure rather than pushing on, so the result always
+// draws a clean line between what's done and what isn't.
+func runSopsUpdatekeys(fleetDir string, relFiles []string) updatekeysResult {
 	sopsPath, err := exec.LookPath("sops")
 	if err != nil {
-		return fmt.Errorf("sops binary not on PATH — install it, then run manually:\n  sops updatekeys -y %s", strings.Join(relFiles, " "))
+		return updatekeysResult{
+			NotAttempted: relFiles,
+			FailedErr:    fmt.Errorf("sops binary not on PATH — install it, then run manually:\n  sops updatekeys -y %s", strings.Join(relFiles, " ")),
+		}
 	}
-	for _, f := range relFiles {
-		c := exec.Command(sopsPath, "updatekeys", "-y", f)
-		c.Dir = fleetPath
+	for i, f := range relFiles {
+		// A fleet-relative path could in principle start with "-"
+		// (matching some creation_rule's regex); prefix it so sops's
+		// own arg parser can never mistake it for a flag.
+		arg := f
+		if !strings.HasPrefix(arg, "/") && !strings.HasPrefix(arg, "./") {
+			arg = "./" + arg
+		}
+		c := exec.Command(sopsPath, "updatekeys", "-y", arg)
+		c.Dir = fleetDir
 		c.Stdout = os.Stderr
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
-			return fmt.Errorf("sops updatekeys %s: %w", f, err)
+			return updatekeysResult{
+				Succeeded:    relFiles[:i],
+				Failed:       f,
+				FailedErr:    fmt.Errorf("sops updatekeys %s: %w", f, err),
+				NotAttempted: relFiles[i+1:],
+			}
 		}
 	}
-	return nil
+	return updatekeysResult{Succeeded: relFiles}
 }

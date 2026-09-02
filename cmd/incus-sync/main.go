@@ -49,9 +49,9 @@ func resolveRemoteForHost(host string) (*config.Remote, error) {
 	if host == "" || host == local {
 		return nil, nil
 	}
-	// LoadRemote will call SOPS, which reads the age key. Make sure
-	// the vault is unlocked (auto-prompts on TTY if missing/expired).
-	if _, err := vault.EnsureUnlocked(); err != nil {
+	// LoadRemote will call SOPS, which reads the age key. Fail fast
+	// with a clear message if no backend is configured at all.
+	if err := vault.EnsureUnlocked(); err != nil {
 		return nil, err
 	}
 	r, err := config.LoadRemote(fleetPath, host)
