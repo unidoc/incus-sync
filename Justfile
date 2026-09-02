@@ -81,6 +81,11 @@ release-pr VERSION:
     [[ "{{VERSION}}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "✗ version must be X.Y.Z (no leading v), got '{{VERSION}}'"; exit 1; }
     [ -z "$(git status --porcelain)" ] || { echo "✗ working tree not clean"; exit 1; }
     git fetch origin
+    if [ "$(git show origin/master:version.txt | tr -d '[:space:]')" = "{{VERSION}}" ]; then
+        echo "✗ version.txt on master is already {{VERSION}} — nothing to bump; run: just release {{VERSION}}"
+        exit 1
+    fi
+    trap 'git checkout master 2>/dev/null; git branch -D "release/v{{VERSION}}" 2>/dev/null || true' EXIT
     git checkout -b "release/v{{VERSION}}" origin/master
     echo "{{VERSION}}" > version.txt
     git add version.txt
@@ -88,6 +93,7 @@ release-pr VERSION:
     git push -u origin "release/v{{VERSION}}"
     gh pr create --title "Release v{{VERSION}}" \
         --body "Bumps version.txt to {{VERSION}}. After merge: \`just release {{VERSION}}\` tags master and CI publishes the release."
+    trap - EXIT
     echo "✓ release PR opened — merge it, then run: just release {{VERSION}}"
 
 # Local test-build of the release pipeline — same artifacts as a real
