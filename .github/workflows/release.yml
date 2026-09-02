@@ -5,12 +5,31 @@ on:
     tags:
       - "v*"
 
+# Ceiling for the whole workflow, including the called test.yml — a
+# reusable workflow can only reduce permissions from its caller, never
+# elevate them. Omitting this block entirely (rather than setting it
+# to `read`) does NOT mean read-only; it falls back to the repo's
+# default GITHUB_TOKEN permissions, which for this repo is a wide set
+# of write scopes.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  # A tag push has no relation to the test workflow (that only triggers
+  # on push:branches/pull_request) — without this gate, goreleaser
+  # would publish from a tagged commit whose tests never ran, or
+  # failed. `just release` checks version.txt/clean-tree/tag-existence
+  # but not CI status, so this has to hold regardless of how the tag
+  # was created. Reused from test.yml (rather than duplicated) so the
+  # two can't drift out of sync.
+  test:
+    uses: ./.github/workflows/test.yml
+
   goreleaser:
+    needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:

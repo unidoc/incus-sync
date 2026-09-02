@@ -4,6 +4,14 @@ on:
   push:
     branches: [master]
   pull_request:
+  workflow_call:
+
+# This also covers the direct push/pull_request triggers, not just
+# the workflow_call path from release.yml — the repo's default
+# GITHUB_TOKEN permissions are a wide set of write scopes, and this
+# job only ever needs to read.
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -16,4 +24,6 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
-      - run: gofmt -l . | tee /tmp/fmt.out && test ! -s /tmp/fmt.out
+      - name: gofmt
+        shell: bash
+        run: gofmt -l . | tee /tmp/fmt.out && test ! -s /tmp/fmt.out
