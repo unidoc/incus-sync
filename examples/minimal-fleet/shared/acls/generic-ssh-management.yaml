@@ -1,0 +1,9 @@
+name: generic-ssh-management
+description: SSH restricted to the fleet's trusted management address set.
+ingress:
+  - action: allow
+    protocol: tcp
+    source: $secure-servers
+    destination_port: "22"
+    description: SSH from trusted management hosts only
+    state: enabled

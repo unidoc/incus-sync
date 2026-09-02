@@ -1,0 +1,8 @@
+name: generic-web-in
+description: Public HTTP/HTTPS ingress from anywhere (ack world-open)
+ingress:
+  - action: allow
+    protocol: tcp
+    destination_port: "80,443"
+    description: World -> container HTTP(S)
+    state: enabled

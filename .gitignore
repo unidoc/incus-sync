@@ -1,0 +1,8 @@
+bin/
+dist/
+*.tmp
+
+.idea/
+.vscode/
+*.swp
+.DS_Store

@@ -1,0 +1,10 @@
+# Declares every Incus project this fleet manages. Required — no
+# fallback. See docs/schema.md.
+projects:
+  - default
+
+# Where network ACLs + address-sets physically live in Incus. "default"
+# is correct for almost every setup (see fleet.yaml's field docs in
+# internal/config/fleet_meta.go) — only change this if you've set
+# features.networks=true on a non-default project.
+network_project: default

@@ -1,0 +1,40 @@
+---
+# Example SOPS encryption policy — illustrative shape, not actually
+# enforced by anything in this example fleet. shared/secrets.sops.yaml
+# here is deliberately left as plain YAML (see its own header comment)
+# so `validate`/`render` need zero AGE-key setup to try. In a real
+# fleet this file drives real encryption — see docs/schema.md's
+# ".sops.yaml" section and README.md's Auth section for how.
+#
+# The recipient below is a real, syntactically valid age public key
+# (from a keypair generated once for this example and discarded) —
+# not a random placeholder string — so it round-trips cleanly through
+# every command that touches it. Its private half was never saved.
+#
+# Try the recipient-management commands against this file directly:
+#   incus-sync --fleet-path examples/minimal-fleet vault list-recipients
+#   incus-sync --fleet-path examples/minimal-fleet vault add-recipient \
+#       example_backup age1u2fys28yezr6l0mh4ptuh2np5wl6zvu0en4ad4mx4tk59gy94a8q42qtfc \
+#       --comment "example only"
+#   incus-sync --fleet-path examples/minimal-fleet vault remove-recipient example_backup
+
+keys:
+  # example_operator — stand-in for "whoever manages this fleet"
+  - &example_operator age1lyv4w3qjldt33svral380xzac90rt7j272agg0vjp72pu2n93dqsdrpjgg
+
+creation_rules:
+  # Per-host Incus API remote — only the sensitive fields are
+  # encrypted; url and server_fingerprint stay plaintext for
+  # git-diff readability. See hosts/<host>/remote.sops.yaml.
+  - path_regex: hosts/.*/remote\.sops\.yaml$
+    encrypted_regex: '^(client_key|client_cert)$'
+    key_groups:
+      - age:
+          - *example_operator
+
+  # Catch-all for any other .sops.yaml in the repo — encrypts every
+  # value. shared/secrets.sops.yaml would match this in a real fleet.
+  - path_regex: \.sops\.ya?ml$
+    key_groups:
+      - age:
+          - *example_operator

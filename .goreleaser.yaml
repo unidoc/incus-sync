@@ -1,0 +1,40 @@
+# goreleaser config — runs in CI on tag push (see .github/workflows/release.yml).
+version: 2
+
+builds:
+  - id: incus-sync
+    main: ./cmd/incus-sync
+    binary: incus-sync
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - freebsd
+      - openbsd
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # OpenBSD is the lowest-priority target — amd64 only.
+      - goos: openbsd
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "incus-sync_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  filters:
+    exclude:
+      - "^Merge "
+
+release:
+  draft: false
+  prerelease: auto

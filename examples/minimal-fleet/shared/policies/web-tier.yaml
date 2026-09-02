@@ -1,0 +1,9 @@
+policy: web-tier
+description: Attach the baseline + web ACLs to any instance tagged "web" (Hetzner-firewall style — label a container, port opens).
+selector:
+  tags: [web]
+attach:
+  security.acls:
+    - default-policy
+    - generic-web-in
+    - generic-ssh-management
