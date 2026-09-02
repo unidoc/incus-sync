@@ -4,6 +4,7 @@ on:
   push:
     branches: [master]
   pull_request:
+  workflow_call:
 
 jobs:
   test:
@@ -16,4 +17,6 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
-      - run: gofmt -l . | tee /tmp/fmt.out && test ! -s /tmp/fmt.out
+      - name: gofmt
+        shell: bash
+        run: gofmt -l . | tee /tmp/fmt.out && test ! -s /tmp/fmt.out
