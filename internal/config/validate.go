@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -321,6 +323,31 @@ func (f *Fleet) validateInstances() error {
 		if inst.IP6 != "" {
 			if _, err := netip.ParseAddr(inst.IP6); err != nil {
 				return fmt.Errorf("instance %q: invalid ip6 %q", name, inst.IP6)
+			}
+		}
+		if !model.ValidInstanceType(inst.Type) {
+			return fmt.Errorf("instance %q: invalid type %q (container or virtual-machine)", name, inst.Type)
+		}
+		if inst.IsVM() {
+			if inst.Provision != nil {
+				return fmt.Errorf("instance %q: provision is not supported for virtual machines (it runs commands inside the guest, which needs the Incus agent there)", name)
+			}
+			// the instance directory is applied at create time too: before.sh, files/ and after.sh
+			for _, f := range []string{"before.sh", "after.sh", "files"} {
+				if inst.SourceDir == "" {
+					break
+				}
+				if _, err := os.Stat(filepath.Join(inst.SourceDir, f)); err == nil {
+					return fmt.Errorf("instance %q: %s next to instance.yaml is not supported for virtual machines (it runs inside the guest, which needs the Incus agent there)", name, f)
+				}
+			}
+		}
+		if b := inst.Backup; b != nil {
+			if b.Exclude && b.Policy != "" {
+				return fmt.Errorf("instance %q: backup.policy and backup.exclude are mutually exclusive", name)
+			}
+			if b.Policy != "" && !model.ValidBackupPolicyName(b.Policy) {
+				return fmt.Errorf("instance %q: invalid backup.policy %q (letters, digits, - _ . only)", name, b.Policy)
 			}
 		}
 		for devName, dev := range inst.EffectiveDevices() {

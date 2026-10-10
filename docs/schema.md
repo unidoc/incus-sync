@@ -208,9 +208,20 @@ of being reusable.
 instance: <name>
 description: <string>
 original_image: images:<alias>              # required if sync should create the container
+type: container | virtual-machine            # optional; default container. Only used on create.
+                                           # A virtual machine cannot have `provision:` (it needs the guest agent).
 profiles: [<profile>...]           # optional; default [default]
 tags: [<tag>...]                   # match tag-based policies
 start: true | false                # optional; default true on first create
+
+# Back this instance up with incus-backup (optional). Written as the Incus
+# config key user.backup.policy / user.backup.exclude. An explicit key on the
+# instance wins over the backup server's own assignments. When this block is
+# absent sync never touches those keys, so a hand-set key survives.
+backup:
+  policy: <name>                   # a policy defined on the backup server (or in client.yaml)
+  # exclude: true                  # alternatively: never back this instance up (exclusive with policy)
+# An empty `backup:` block (no policy, no exclude) removes both keys.
 
 # eth0 device — all fields optional
 ip4: <IPv4 address>                # if set, ip4_prefix_length + ip4_gateway are REQUIRED

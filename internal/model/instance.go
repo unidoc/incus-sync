@@ -38,6 +38,9 @@ type Instance struct {
 	// omitted. Different projects on the same host give logical
 	// separation with the operator's own cert scoped to all of them.
 	Project string `yaml:"project,omitempty"`
+	// Type is "container" (the default) or "virtual-machine". Only consulted on
+	// create: an existing instance keeps the type it has.
+	Type string `yaml:"type,omitempty"`
 	// OriginalImage is the launch-time image (e.g. "images:alpine/3.24").
 	// Container filesystems drift from the image immediately after apk
 	// upgrade / apt install / etc., so this field is deliberately named
@@ -47,6 +50,12 @@ type Instance struct {
 	Profiles      []string `yaml:"profiles,omitempty"`
 	Tags          []string `yaml:"tags,omitempty"`
 	Start         *bool    `yaml:"start,omitempty"`
+
+	// Backup selects this instance for incus-backup. When the block is
+	// present sync owns the two Incus config keys below; when it is absent
+	// sync never touches them, so a hand-set `incus config set
+	// user.backup.policy ...` survives.
+	Backup *InstanceBackup `yaml:"backup,omitempty"`
 
 	// Flat eth0 form.
 	IP4 string `yaml:"ip4,omitempty"`
@@ -229,6 +238,9 @@ func InstanceFromAPI(inst api.Instance) Instance {
 		Name:        inst.Name,
 		Description: inst.Description,
 	}
+	if inst.Type == InstanceTypeVM {
+		out.Type = InstanceTypeVM // a container is the default and stays implicit
+	}
 
 	// Union of profile-provided and local devices, local override wins.
 	all := map[string]map[string]string{}
@@ -312,4 +324,70 @@ func (i *Instance) Validate() error {
 		}
 	}
 	return nil
+}
+
+// Incus config keys incus-backup reads. An explicit key on the instance wins
+// over server-side policy assignments, which is what makes this block useful.
+const (
+	BackupPolicyKey  = "user.backup.policy"
+	BackupExcludeKey = "user.backup.exclude"
+)
+
+// InstanceBackup is the `backup:` block of an instance.
+//
+//	backup:
+//	  policy: nightly      # -> user.backup.policy=nightly
+//
+//	backup:
+//	  exclude: true        # -> user.backup.exclude=true (never back this up)
+type InstanceBackup struct {
+	Policy  string `yaml:"policy,omitempty"`
+	Exclude bool   `yaml:"exclude,omitempty"`
+}
+
+// BackupConfig returns the Incus config keys to set and to remove for the
+// declared backup block, and whether sync manages them at all.
+func (i Instance) BackupConfig() (set map[string]string, unset []string, managed bool) {
+	if i.Backup == nil {
+		return nil, nil, false
+	}
+	set = map[string]string{}
+	switch {
+	case i.Backup.Exclude:
+		set[BackupExcludeKey] = "true"
+		unset = append(unset, BackupPolicyKey)
+	case i.Backup.Policy != "":
+		set[BackupPolicyKey] = i.Backup.Policy
+		unset = append(unset, BackupExcludeKey)
+	default:
+		unset = append(unset, BackupPolicyKey, BackupExcludeKey)
+	}
+	return set, unset, true
+}
+
+// ValidBackupPolicyName reports whether s is a usable policy name.
+func ValidBackupPolicyName(s string) bool {
+	if s == "" || len(s) > 63 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+// Instance types sync can create (the Incus API names).
+const (
+	InstanceTypeContainer = "container"
+	InstanceTypeVM        = "virtual-machine"
+)
+
+// IsVM reports whether the instance is declared as a virtual machine.
+func (i Instance) IsVM() bool { return i.Type == InstanceTypeVM }
+
+// ValidInstanceType reports whether t is a type sync can create ("" means container).
+func ValidInstanceType(t string) bool {
+	return t == "" || t == InstanceTypeContainer || t == InstanceTypeVM
 }
