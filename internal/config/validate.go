@@ -332,12 +332,18 @@ func (f *Fleet) validateInstances() error {
 			if inst.Provision != nil {
 				return fmt.Errorf("instance %q: provision is not supported for virtual machines (it runs commands inside the guest, which needs the Incus agent there)", name)
 			}
-			// the instance directory is applied at create time too: before.sh, files/ and after.sh
-			for _, f := range []string{"before.sh", "after.sh", "files"} {
-				if inst.SourceDir == "" {
-					break
-				}
-				if _, err := os.Stat(filepath.Join(inst.SourceDir, f)); err == nil {
+			// the instance directory is applied at create time too: before.sh, files/ and after.sh.
+			// An empty files/ (as `incus-sync create` scaffolds it) pushes nothing and is fine; so is a
+			// placeholder such as .gitkeep.
+			if inst.SourceDir != "" {
+				for _, f := range []string{"before.sh", "after.sh", "files"} {
+					p := filepath.Join(inst.SourceDir, f)
+					if _, err := os.Stat(p); err != nil {
+						continue
+					}
+					if f == "files" && !hasVisibleEntries(p) {
+						continue
+					}
 					return fmt.Errorf("instance %q: %s next to instance.yaml is not supported for virtual machines (it runs inside the guest, which needs the Incus agent there)", name, f)
 				}
 			}
@@ -380,3 +386,17 @@ func checkAddress(s string) error {
 // Ensure the model import stays live once we lean on it more heavily
 // (e.g. tags, additional resolvers).
 var _ = model.AliasRef
+
+// hasVisibleEntries reports whether dir holds anything besides dotfiles (.gitkeep and the like).
+func hasVisibleEntries(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return true // unreadable: do not guess that it is empty
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".") {
+			return true
+		}
+	}
+	return false
+}

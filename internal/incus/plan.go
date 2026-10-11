@@ -61,6 +61,9 @@ type PlanEntry struct {
 
 	execCreate func(incusclient.InstanceServer) error
 	execUpdate func(incusclient.InstanceServer) error
+	// policyReport marks a fleet-policy violation: shown and gated like an
+	// update, never executed (sync does not rewrite the forbidden keys).
+	policyReport bool
 }
 
 // HasDangers reports whether any entry in the plan is refuse-worthy.
@@ -202,6 +205,14 @@ func (p *Plan) Apply(srv incusclient.InstanceServer, dryRun bool) error {
 		if e.Project != "" {
 			label = fmt.Sprintf("%s (project %s)", e.Name, e.Project)
 		}
+		if e.policyReport {
+			// --force got past the refusal; the instance is left as it is. Dry run and apply say the same.
+			fmt.Printf("  ! policy violation %s %s (left as is, reset it by hand)\n", e.Kind, label)
+			for _, d := range e.Details {
+				fmt.Printf("      %s\n", d)
+			}
+			continue
+		}
 		switch e.Action {
 		case ActionCreate:
 			if dryRun {
@@ -210,6 +221,9 @@ func (p *Plan) Apply(srv incusclient.InstanceServer, dryRun bool) error {
 					fmt.Printf("      %s\n", d)
 				}
 				continue
+			}
+			if e.execCreate == nil {
+				return fmt.Errorf("create %s %q in project %q: plan entry has no executor (bug)", e.Kind, e.Name, e.Project)
 			}
 			if err := e.execCreate(scoped); err != nil {
 				return fmt.Errorf("create %s %q in project %q: %w", e.Kind, e.Name, e.Project, err)
@@ -224,10 +238,7 @@ func (p *Plan) Apply(srv incusclient.InstanceServer, dryRun bool) error {
 				continue
 			}
 			if e.execUpdate == nil {
-				// A policy-violation report has nothing to execute: sync never rewrites the
-				// forbidden keys. --force lets the plan proceed; the instance stays as it is.
-				fmt.Printf("  ! left as is %s %s (policy violation, reset it by hand)\n", e.Kind, label)
-				continue
+				return fmt.Errorf("update %s %q in project %q: plan entry has no executor (bug)", e.Kind, e.Name, e.Project)
 			}
 			if err := e.execUpdate(scoped); err != nil {
 				return fmt.Errorf("update %s %q in project %q: %w", e.Kind, e.Name, e.Project, err)
@@ -606,7 +617,8 @@ func planInstances(p *Plan, fleet *config.Fleet, live []api.Instance) {
 			if got, ok := l.Config[k]; ok && got == forbidden {
 				p.Entries = append(p.Entries, PlanEntry{
 					Kind: "instance", Name: l.Name, Action: ActionUpdate,
-					Details: []string{fmt.Sprintf("policy violation: %s=%q", k, got)},
+					Details:      []string{fmt.Sprintf("policy violation: %s=%q", k, got)},
+					policyReport: true,
 					Dangers: []string{fmt.Sprintf(
 						"instance %q has %s=%q which violates fleet isolation policy. "+
 							"Reset via `incus config unset %s %s`. sync --apply refuses without --force.",
@@ -657,6 +669,14 @@ func planInstances(p *Plan, fleet *config.Fleet, live []api.Instance) {
 			}
 			if desired.Provision != nil && len(desired.Provision.Templates) > 0 {
 				details = append(details, fmt.Sprintf("templates: %v", desired.Provision.Templates))
+			}
+			if desired.IsVM() {
+				details = append(details, "type: virtual-machine")
+			}
+			if set, _, managed := desired.BackupConfig(); managed {
+				for _, k := range sortedKeys(set) {
+					details = append(details, fmt.Sprintf("%s: %s", k, set[k]))
+				}
 			}
 			p.Entries = append(p.Entries, PlanEntry{
 				Kind: "instance", Name: name, Action: ActionCreate,
@@ -743,9 +763,6 @@ func planInstances(p *Plan, fleet *config.Fleet, live []api.Instance) {
 	}
 }
 
-// createInstance builds an api.InstancesPost and creates the container.
-// eth0's security.acls are already the effective (merged) list, so the
-// container is correctly firewalled from first boot.
 // instanceCreateRequest is the Incus create request of a declared instance: the type (container by
 // default, or virtual-machine), the image, profiles, devices and the backup keys.
 func instanceCreateRequest(desired model.Instance, source api.InstanceSource, profiles []string, devices map[string]map[string]string, start bool) api.InstancesPost {
@@ -771,6 +788,9 @@ func instanceCreateRequest(desired model.Instance, source api.InstanceSource, pr
 	}
 }
 
+// createInstance builds an api.InstancesPost and creates the instance.
+// eth0's security.acls are already the effective (merged) list, so the
+// instance is correctly firewalled from first boot.
 func createInstance(desired model.Instance, devices map[string]map[string]string, templatePaths []string, secrets map[string]any) func(incusclient.InstanceServer) error {
 	return func(srv incusclient.InstanceServer) error {
 		source, err := parseImageSource(desired.OriginalImage)
@@ -1115,17 +1135,33 @@ func planInstanceBackup(p *Plan, name string, desired model.Instance, existing a
 	if !managed {
 		return
 	}
-	var deltas []string
-	for _, k := range sortedKeys(set) {
-		if got, ok := existing.Config[k]; !ok || got != set[k] {
-			deltas = append(deltas, fmt.Sprintf("%s: %q -> %q", k, existing.Config[k], set[k]))
+	// incus-backup selects from the EFFECTIVE config (profile keys included), so compare against it.
+	eff := existing.ExpandedConfig
+	if eff == nil {
+		eff = existing.Config
+	}
+	want := map[string]string{}
+	for k, v := range set {
+		want[k] = v
+	}
+	var deltas, toUnset []string
+	for _, k := range unset {
+		_, local := existing.Config[k]
+		switch {
+		case k == model.BackupExcludeKey && desired.Backup.Policy != "":
+			// exclude beats policy in incus-backup, so it must not be in effect. An instance key cannot
+			// remove a profile's key, but "false" overrides it.
+			if backupTrue(eff[k]) {
+				want[k] = "false"
+			}
+		case local:
+			toUnset = append(toUnset, k)
+			deltas = append(deltas, fmt.Sprintf("%s: %q → (unset)", k, existing.Config[k]))
 		}
 	}
-	var toUnset []string
-	for _, k := range unset {
-		if _, ok := existing.Config[k]; ok {
-			toUnset = append(toUnset, k)
-			deltas = append(deltas, fmt.Sprintf("%s: %q -> (unset)", k, existing.Config[k]))
+	for _, k := range sortedKeys(want) {
+		if got, ok := eff[k]; !ok || got != want[k] {
+			deltas = append(deltas, fmt.Sprintf("%s: %q → %q", k, eff[k], want[k]))
 		}
 	}
 	if len(deltas) == 0 {
@@ -1134,8 +1170,17 @@ func planInstanceBackup(p *Plan, name string, desired model.Instance, existing a
 	}
 	p.Entries = append(p.Entries, PlanEntry{
 		Kind: "instance-config", Name: name + ".backup", Action: ActionUpdate, Details: deltas,
-		execUpdate: updateInstanceConfig(name, set, toUnset),
+		execUpdate: updateInstanceConfig(name, want, toUnset),
 	})
+}
+
+// backupTrue mirrors incus-backup's reading of user.backup.exclude.
+func backupTrue(s string) bool {
+	switch strings.ToLower(s) {
+	case "true", "1", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // updateInstanceConfig patches individual instance config keys, leaving every

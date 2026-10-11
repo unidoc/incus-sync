@@ -208,8 +208,11 @@ of being reusable.
 instance: <name>
 description: <string>
 original_image: images:<alias>              # required if sync should create the container
-type: container | virtual-machine            # optional; default container. Only used on create.
-                                           # A virtual machine cannot have `provision:` (it needs the guest agent).
+type: container | virtual-machine            # optional; default container. Only used on create: an existing
+                                           # instance keeps its type, so an existing VM is declared the same way
+                                           # (`import` writes `type: virtual-machine`). A virtual machine cannot have
+                                           # `provision:`, before.sh, after.sh or a non-empty files/ (they run
+                                           # inside the guest and need the Incus agent).
 profiles: [<profile>...]           # optional; default [default]
 tags: [<tag>...]                   # match tag-based policies
 start: true | false                # optional; default true on first create
@@ -221,7 +224,12 @@ start: true | false                # optional; default true on first create
 backup:
   policy: <name>                   # a policy defined on the backup server (or in client.yaml)
   # exclude: true                  # alternatively: never back this instance up (exclusive with policy)
-# An empty `backup:` block (no policy, no exclude) removes both keys.
+# `backup: {}` removes both keys from the instance. A bare `backup:` with nothing under it is
+# YAML null and counts as an absent block (the keys are left alone), and an unknown key inside
+# the block (a typo such as `polcy:`) is a load error. Sync compares against the effective
+# config: when the instance declares a policy and a profile sets user.backup.exclude, the instance
+# gets user.backup.exclude=false (an instance key cannot remove a profile key). `backup: {}`
+# cannot remove a user.backup.policy that comes from a profile.
 
 # eth0 device — all fields optional
 ip4: <IPv4 address>                # if set, ip4_prefix_length + ip4_gateway are REQUIRED
@@ -287,6 +295,14 @@ belong inside the container's own network config (see `provision.interface`),
 not on the Incus device. Only the three keys shown above are
 reconciled per device. Every other key on the
 device — including profile-provided ones — is left alone.
+
+## Instance isolation policy
+
+A live instance with `security.privileged=true` or `security.idmap.isolated=false` is reported as
+a policy violation, and `sync --apply` refuses without `--force`. With `--force` the rest of the
+plan is applied and the instance is left as it is: sync never rewrites these keys, so reset them by
+hand (`incus config unset <instance> <key>`). `security.nesting=true` is allowed for an
+unprivileged container (Docker, Incus or LXC inside it).
 
 ## Reference syntax
 

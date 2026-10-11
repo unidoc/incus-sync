@@ -40,7 +40,10 @@ func TestVMRefusesProvisioningFilesInItsDirectory(t *testing.T) {
 		dir := t.TempDir()
 		p := filepath.Join(dir, f)
 		if f == "files" {
-			if err := os.Mkdir(p, 0o755); err != nil {
+			if err := os.MkdirAll(p, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(p, "motd"), []byte("hi\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		} else if err := os.WriteFile(p, []byte("true\n"), 0o644); err != nil {
@@ -58,5 +61,23 @@ func TestVMRefusesProvisioningFilesInItsDirectory(t *testing.T) {
 	vm := &Fleet{Instances: map[string]model.Instance{"web": {Name: "web", Type: "virtual-machine", SourceDir: t.TempDir()}}}
 	if err := vm.validateInstances(); err != nil {
 		t.Errorf("an empty instance directory is fine for a VM: %v", err)
+	}
+}
+
+// An empty files/ (what `incus-sync create` scaffolds) or one holding only a placeholder pushes nothing.
+func TestVMAllowsAnEmptyFilesDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "files"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	vm := &Fleet{Instances: map[string]model.Instance{"web": {Name: "web", Type: "virtual-machine", SourceDir: dir}}}
+	if err := vm.validateInstances(); err != nil {
+		t.Errorf("empty files/: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "files", ".gitkeep"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := vm.validateInstances(); err != nil {
+		t.Errorf("files/ with only .gitkeep: %v", err)
 	}
 }

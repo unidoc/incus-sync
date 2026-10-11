@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/lxc/incus/v7/shared/api"
+	"gopkg.in/yaml.v3"
 )
 
 // Instance describes the network policy for one container. It lives at
@@ -390,4 +391,18 @@ func (i Instance) IsVM() bool { return i.Type == InstanceTypeVM }
 // ValidInstanceType reports whether t is a type sync can create ("" means container).
 func ValidInstanceType(t string) bool {
 	return t == "" || t == InstanceTypeContainer || t == InstanceTypeVM
+}
+
+// UnmarshalYAML refuses unknown keys: the fleet loader is not strict, and a misspelt key (polcy:)
+// would otherwise leave an empty block, which removes both keys from the instance.
+func (b *InstanceBackup) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if k := node.Content[i].Value; k != "policy" && k != "exclude" {
+				return fmt.Errorf("line %d: unknown key %q in backup: (policy or exclude)", node.Content[i].Line, k)
+			}
+		}
+	}
+	type raw InstanceBackup
+	return node.Decode((*raw)(b))
 }
