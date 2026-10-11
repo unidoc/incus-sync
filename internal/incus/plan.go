@@ -61,6 +61,9 @@ type PlanEntry struct {
 
 	execCreate func(incusclient.InstanceServer) error
 	execUpdate func(incusclient.InstanceServer) error
+	// policyReport marks a fleet-policy violation: shown and gated like an
+	// update, never executed (sync does not rewrite the forbidden keys).
+	policyReport bool
 }
 
 // HasDangers reports whether any entry in the plan is refuse-worthy.
@@ -202,6 +205,14 @@ func (p *Plan) Apply(srv incusclient.InstanceServer, dryRun bool) error {
 		if e.Project != "" {
 			label = fmt.Sprintf("%s (project %s)", e.Name, e.Project)
 		}
+		if e.policyReport {
+			// --force got past the refusal; the instance is left as it is. Dry run and apply say the same.
+			fmt.Printf("  ! policy violation %s %s (left as is, reset it by hand)\n", e.Kind, label)
+			for _, d := range e.Details {
+				fmt.Printf("      %s\n", d)
+			}
+			continue
+		}
 		switch e.Action {
 		case ActionCreate:
 			if dryRun {
@@ -210,6 +221,9 @@ func (p *Plan) Apply(srv incusclient.InstanceServer, dryRun bool) error {
 					fmt.Printf("      %s\n", d)
 				}
 				continue
+			}
+			if e.execCreate == nil {
+				return fmt.Errorf("create %s %q in project %q: plan entry has no executor (bug)", e.Kind, e.Name, e.Project)
 			}
 			if err := e.execCreate(scoped); err != nil {
 				return fmt.Errorf("create %s %q in project %q: %w", e.Kind, e.Name, e.Project, err)
@@ -222,6 +236,9 @@ func (p *Plan) Apply(srv incusclient.InstanceServer, dryRun bool) error {
 					fmt.Printf("      %s\n", d)
 				}
 				continue
+			}
+			if e.execUpdate == nil {
+				return fmt.Errorf("update %s %q in project %q: plan entry has no executor (bug)", e.Kind, e.Name, e.Project)
 			}
 			if err := e.execUpdate(scoped); err != nil {
 				return fmt.Errorf("update %s %q in project %q: %w", e.Kind, e.Name, e.Project, err)
@@ -574,10 +591,13 @@ func updateACL(name string, put api.NetworkACLPut) func(incusclient.InstanceServ
 // surfaced as a plan-time refusal, so an operator (or attacker with
 // fleet write) can't quietly turn off idmap or privileged=false via
 // `incus config set` and have sync accept the state.
+//
+// security.nesting is deliberately NOT listed: nesting (Docker, Incus or
+// LXC inside a container) is allowed for an unprivileged container, which
+// is the only kind this policy lets exist. Privileged containers stay banned.
 var forbiddenInstanceConfig = map[string]string{
 	"security.privileged":     "true",
 	"security.idmap.isolated": "false",
-	"security.nesting":        "true",
 }
 
 func planInstances(p *Plan, fleet *config.Fleet, live []api.Instance) {
@@ -597,7 +617,8 @@ func planInstances(p *Plan, fleet *config.Fleet, live []api.Instance) {
 			if got, ok := l.Config[k]; ok && got == forbidden {
 				p.Entries = append(p.Entries, PlanEntry{
 					Kind: "instance", Name: l.Name, Action: ActionUpdate,
-					Details: []string{fmt.Sprintf("policy violation: %s=%q", k, got)},
+					Details:      []string{fmt.Sprintf("policy violation: %s=%q", k, got)},
+					policyReport: true,
 					Dangers: []string{fmt.Sprintf(
 						"instance %q has %s=%q which violates fleet isolation policy. "+
 							"Reset via `incus config unset %s %s`. sync --apply refuses without --force.",
@@ -649,6 +670,14 @@ func planInstances(p *Plan, fleet *config.Fleet, live []api.Instance) {
 			if desired.Provision != nil && len(desired.Provision.Templates) > 0 {
 				details = append(details, fmt.Sprintf("templates: %v", desired.Provision.Templates))
 			}
+			if desired.IsVM() {
+				details = append(details, "type: virtual-machine")
+			}
+			if set, _, managed := desired.BackupConfig(); managed {
+				for _, k := range sortedKeys(set) {
+					details = append(details, fmt.Sprintf("%s: %s", k, set[k]))
+				}
+			}
 			p.Entries = append(p.Entries, PlanEntry{
 				Kind: "instance", Name: name, Action: ActionCreate,
 				Details:    details,
@@ -656,6 +685,8 @@ func planInstances(p *Plan, fleet *config.Fleet, live []api.Instance) {
 			})
 			continue
 		}
+
+		planInstanceBackup(p, name, desired, existing)
 
 		effectiveDevs := desired.EffectiveDevices()
 		if effectiveDevs == nil && len(desired.Devices) == 0 {
@@ -732,9 +763,34 @@ func planInstances(p *Plan, fleet *config.Fleet, live []api.Instance) {
 	}
 }
 
-// createInstance builds an api.InstancesPost and creates the container.
+// instanceCreateRequest is the Incus create request of a declared instance: the type (container by
+// default, or virtual-machine), the image, profiles, devices and the backup keys.
+func instanceCreateRequest(desired model.Instance, source api.InstanceSource, profiles []string, devices map[string]map[string]string, start bool) api.InstancesPost {
+	var cfg map[string]string
+	if set, _, managed := desired.BackupConfig(); managed && len(set) > 0 {
+		cfg = set
+	}
+	typ := api.InstanceTypeContainer
+	if desired.IsVM() {
+		typ = api.InstanceTypeVM
+	}
+	return api.InstancesPost{
+		InstancePut: api.InstancePut{
+			Description: desired.Description,
+			Config:      cfg,
+			Devices:     devices,
+			Profiles:    profiles,
+		},
+		Name:   desired.Name,
+		Source: source,
+		Type:   typ,
+		Start:  start,
+	}
+}
+
+// createInstance builds an api.InstancesPost and creates the instance.
 // eth0's security.acls are already the effective (merged) list, so the
-// container is correctly firewalled from first boot.
+// instance is correctly firewalled from first boot.
 func createInstance(desired model.Instance, devices map[string]map[string]string, templatePaths []string, secrets map[string]any) func(incusclient.InstanceServer) error {
 	return func(srv incusclient.InstanceServer) error {
 		source, err := parseImageSource(desired.OriginalImage)
@@ -758,27 +814,21 @@ func createInstance(desired model.Instance, devices map[string]map[string]string
 		// Incus's own profile-resolution order.
 		devices = fillDevicesFromProfiles(srv, profiles, devices)
 
-		req := api.InstancesPost{
-			InstancePut: api.InstancePut{
-				Description: desired.Description,
-				Devices:     devices,
-				Profiles:    profiles,
-			},
-			Name:   desired.Name,
-			Source: source,
-			Type:   api.InstanceTypeContainer,
-			Start:  start,
+		req := instanceCreateRequest(desired, source, profiles, devices, start)
+		kind, waitFor := "container", 120*time.Second
+		if desired.IsVM() {
+			kind, waitFor = "virtual machine", 600*time.Second // the image is larger and the VM firmware boots
 		}
-		printStep("      launching container (image %s)…", desired.OriginalImage)
+		printStep("      launching %s (image %s)…", kind, desired.OriginalImage)
 		t0 := time.Now()
 		op, err := srv.CreateInstance(req)
 		if err != nil {
 			return err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), waitFor)
 		defer cancel()
 		if err := op.WaitContext(ctx); err != nil {
-			return fmt.Errorf("instance %q create did not complete in 120s: %w", desired.Name, err)
+			return fmt.Errorf("instance %q create did not complete in %s: %w", desired.Name, waitFor, err)
 		}
 		printDone("      launched", time.Since(t0))
 		// Post-create health: if Start was true, verify the container
@@ -804,6 +854,9 @@ func createInstance(desired model.Instance, devices map[string]map[string]string
 		// re-sync recreates cleanly. Leaving a broken container around
 		// means subsequent sync passes see it as "existing" and skip both
 		// create AND provision.
+		if desired.IsVM() {
+			return nil // validation refuses provisioning for a VM; nothing here may need the guest agent
+		}
 		if err := provisionContainer(srv, desired, templatePaths, secrets); err != nil {
 			cleanupInstance(srv, desired.Name)
 			return fmt.Errorf(
@@ -1073,3 +1126,89 @@ func configMapEqual(a, b api.ConfigMap) bool {
 // Ensure model import stays live for future extensions (e.g. explicit
 // device-key allowlist enforcement in sync).
 var _ = model.AliasRef
+
+// planInstanceBackup reconciles the user.backup.* config keys of one existing
+// instance with its `backup:` block. Only those two keys are ever touched, and
+// only when the block is declared, so a hand-set key survives an absent block.
+func planInstanceBackup(p *Plan, name string, desired model.Instance, existing api.Instance) {
+	set, unset, managed := desired.BackupConfig()
+	if !managed {
+		return
+	}
+	// incus-backup selects from the EFFECTIVE config (profile keys included), so compare against it.
+	eff := existing.ExpandedConfig
+	if eff == nil {
+		eff = existing.Config
+	}
+	want := map[string]string{}
+	for k, v := range set {
+		want[k] = v
+	}
+	var deltas, toUnset []string
+	for _, k := range unset {
+		_, local := existing.Config[k]
+		switch {
+		case k == model.BackupExcludeKey && desired.Backup.Policy != "":
+			// exclude beats policy in incus-backup, so it must not be in effect. An instance key cannot
+			// remove a profile's key, but "false" overrides it.
+			if backupTrue(eff[k]) {
+				want[k] = "false"
+			}
+		case local:
+			toUnset = append(toUnset, k)
+			deltas = append(deltas, fmt.Sprintf("%s: %q → (unset)", k, existing.Config[k]))
+		}
+	}
+	for _, k := range sortedKeys(want) {
+		if got, ok := eff[k]; !ok || got != want[k] {
+			deltas = append(deltas, fmt.Sprintf("%s: %q → %q", k, eff[k], want[k]))
+		}
+	}
+	if len(deltas) == 0 {
+		p.Entries = append(p.Entries, PlanEntry{Kind: "instance-config", Name: name + ".backup", Action: ActionMatch})
+		return
+	}
+	p.Entries = append(p.Entries, PlanEntry{
+		Kind: "instance-config", Name: name + ".backup", Action: ActionUpdate, Details: deltas,
+		execUpdate: updateInstanceConfig(name, want, toUnset),
+	})
+}
+
+// backupTrue mirrors incus-backup's reading of user.backup.exclude.
+func backupTrue(s string) bool {
+	switch strings.ToLower(s) {
+	case "true", "1", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// updateInstanceConfig patches individual instance config keys, leaving every
+// other key (including ones set by hand) untouched.
+func updateInstanceConfig(name string, set map[string]string, unset []string) func(incusclient.InstanceServer) error {
+	return func(srv incusclient.InstanceServer) error {
+		inst, etag, err := srv.GetInstance(name)
+		if err != nil {
+			return err
+		}
+		if inst.Config == nil {
+			inst.Config = map[string]string{}
+		}
+		for _, k := range unset {
+			delete(inst.Config, k)
+		}
+		for k, v := range set {
+			inst.Config[k] = v
+		}
+		op, err := srv.UpdateInstance(name, inst.Writable(), etag)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := op.WaitContext(ctx); err != nil {
+			return fmt.Errorf("instance %q config update did not complete in 60s: %w", name, err)
+		}
+		return nil
+	}
+}

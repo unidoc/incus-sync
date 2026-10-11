@@ -16,7 +16,8 @@ and container identity can use it.
 - Network ACLs (with tag-based policy attachment, Hetzner-firewall style)
 - Fleet-repo-only host aliases (`@name` expansion, cycle-detected)
 - Per-instance eth0 device config: static IPs, attached ACLs, default actions
-- Container creation with declared image + tags
+- Container and virtual-machine creation with declared image + tags (`type: virtual-machine`)
+- Backup selection for [incus-backup](https://github.com/unidoc/incus-backup): `backup: {policy: nightly}` sets the Incus key `user.backup.policy` (and `exclude: true` sets `user.backup.exclude`)
 
 ## What it deliberately does NOT manage
 
@@ -307,6 +308,11 @@ of these dangerous shapes:
 - Instance eth0 `ingress-default` changing from `reject` or `drop` to
   `allow` (world-open flip).
 - Instance eth0 removing all attached ACLs.
+- A live instance with `security.privileged=true` or
+  `security.idmap.isolated=false`. Nesting (`security.nesting=true`) is
+  allowed for unprivileged containers. `--force` lets the rest of the plan
+  proceed; sync never rewrites these keys, so the instance is left as it is
+  and has to be reset by hand (`incus config unset <instance> <key>`).
 
 Emitted by `diff` in red with a `DANGER` prefix; emitted by `sync
 --apply` output and required in a `--force` flag before proceeding.
