@@ -17,19 +17,19 @@ import (
 )
 
 // writeTwoHostFleet lays out a minimal fleet under t.TempDir() with two
-// hosts in different projects: hosta/web-a in "unidoc", hostb/web-b in
-// "foxyutils". Mirrors internal/config's own host_projects_test.go
+// hosts in different projects: hosta/web-a in "web", hostb/web-b in
+// "db". Mirrors internal/config's own host_projects_test.go
 // fixture, duplicated here since it's unexported in another package.
 func writeTwoHostFleet(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	fleetYAML := "projects:\n  - unidoc\n  - foxyutils\n"
+	fleetYAML := "projects:\n  - web\n  - db\n"
 	if err := os.WriteFile(filepath.Join(dir, "fleet.yaml"), []byte(fleetYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, hip := range []struct{ host, inst, project string }{
-		{"hosta", "web-a", "unidoc"},
-		{"hostb", "web-b", "foxyutils"},
+		{"hosta", "web-a", "web"},
+		{"hostb", "web-b", "db"},
 	} {
 		instDir := filepath.Join(dir, "hosts", hip.host, "instances", hip.inst)
 		if err := os.MkdirAll(instDir, 0o755); err != nil {
@@ -70,30 +70,30 @@ func (s *scopeSrv) GetInstances(api.InstanceType) ([]api.Instance, error) {
 }
 
 // TestComputePlanOnlyQueriesHostProjects is the end-to-end regression:
-// loading hosta for real via config.Load (hostb owns "foxyutils", hosta
-// owns "unidoc") must leave ComputePlan never touching "foxyutils" at
+// loading hosta for real via config.Load (hostb owns "db", hosta
+// owns "web") must leave ComputePlan never touching "db" at
 // all. Fails without narrowProjectsToHost, since fleet.Projects would
-// then still be the fleet-wide ["unidoc", "foxyutils"] list.
+// then still be the fleet-wide ["web", "db"] list.
 func TestComputePlanOnlyQueriesHostProjects(t *testing.T) {
 	dir := writeTwoHostFleet(t)
 	fleet, err := config.Load(dir, "hosta")
 	if err != nil {
 		t.Fatalf("Load(hosta): %v", err)
 	}
-	if got := fleet.Projects; len(got) != 1 || got[0] != "unidoc" {
-		t.Fatalf("fleet.Projects = %v, want [unidoc] (fixture/narrowing assumption broke)", got)
+	if got := fleet.Projects; len(got) != 1 || got[0] != "web" {
+		t.Fatalf("fleet.Projects = %v, want [web] (fixture/narrowing assumption broke)", got)
 	}
 
 	queried := map[string]bool{}
-	srv := &scopeSrv{t: t, allowed: map[string]bool{"default": true, "unidoc": true}, queried: queried}
+	srv := &scopeSrv{t: t, allowed: map[string]bool{"default": true, "web": true}, queried: queried}
 
 	if _, err := ComputePlan(srv, fleet); err != nil {
 		t.Fatalf("ComputePlan: %v", err)
 	}
-	if !queried["unidoc"] {
-		t.Error("expected ComputePlan to query the unidoc project")
+	if !queried["web"] {
+		t.Error("expected ComputePlan to query the web project")
 	}
-	if queried["foxyutils"] {
+	if queried["db"] {
 		t.Error("ComputePlan must never query a project this host doesn't list")
 	}
 }

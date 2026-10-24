@@ -13,7 +13,7 @@ import (
 func writeFleet(t *testing.T, hostProjectsYAML string, instancesByHost map[string]map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
-	fleetYAML := "projects:\n  - unidoc\n  - foxyutils\n" + hostProjectsYAML
+	fleetYAML := "projects:\n  - web\n  - db\n" + hostProjectsYAML
 	if err := os.WriteFile(filepath.Join(dir, "fleet.yaml"), []byte(fleetYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -44,24 +44,24 @@ func writeFleet(t *testing.T, hostProjectsYAML string, instancesByHost map[strin
 // host's effective Projects, even though both are declared fleet-wide.
 func TestHostProjectsNarrowedToInstancesUsed(t *testing.T) {
 	dir := writeFleet(t, "", map[string]map[string]string{
-		"hosta": {"web-a": "unidoc"},
-		"hostb": {"web-b": "foxyutils"},
+		"hosta": {"web-a": "web"},
+		"hostb": {"web-b": "db"},
 	})
 
 	fa, err := Load(dir, "hosta")
 	if err != nil {
 		t.Fatalf("Load(hosta): %v", err)
 	}
-	if got := fa.Projects; len(got) != 1 || got[0] != "unidoc" {
-		t.Errorf("hosta Projects = %v, want [unidoc]", got)
+	if got := fa.Projects; len(got) != 1 || got[0] != "web" {
+		t.Errorf("hosta Projects = %v, want [web]", got)
 	}
 
 	fb, err := Load(dir, "hostb")
 	if err != nil {
 		t.Fatalf("Load(hostb): %v", err)
 	}
-	if got := fb.Projects; len(got) != 1 || got[0] != "foxyutils" {
-		t.Errorf("hostb Projects = %v, want [foxyutils] — a project only hostb uses must not leak onto hosta and vice versa", got)
+	if got := fb.Projects; len(got) != 1 || got[0] != "db" {
+		t.Errorf("hostb Projects = %v, want [db] — a project only hostb uses must not leak onto hosta and vice versa", got)
 	}
 }
 
@@ -70,7 +70,7 @@ func TestHostProjectsNarrowedToInstancesUsed(t *testing.T) {
 // must never be scoped to the fleet-wide project list by default.
 func TestHostWithNoInstancesHasEmptyProjects(t *testing.T) {
 	dir := writeFleet(t, "", map[string]map[string]string{
-		"hosta": {"web-a": "unidoc"},
+		"hosta": {"web-a": "web"},
 		"hostb": {}, // no instances at all
 	})
 	fb, err := Load(dir, "hostb")
@@ -86,15 +86,15 @@ func TestHostWithNoInstancesHasEmptyProjects(t *testing.T) {
 // pre-declares a project for a host before any instance uses it (e.g.
 // so `doctor --deep`/`remote bootstrap` know about it).
 func TestHostProjectsExplicitEntry(t *testing.T) {
-	dir := writeFleet(t, "host_projects:\n  hostb:\n    - foxyutils\n", map[string]map[string]string{
+	dir := writeFleet(t, "host_projects:\n  hostb:\n    - db\n", map[string]map[string]string{
 		"hostb": {}, // no instances yet
 	})
 	fb, err := Load(dir, "hostb")
 	if err != nil {
 		t.Fatalf("Load(hostb): %v", err)
 	}
-	if got := fb.Projects; len(got) != 1 || got[0] != "foxyutils" {
-		t.Errorf("hostb Projects = %v, want [foxyutils] from host_projects", got)
+	if got := fb.Projects; len(got) != 1 || got[0] != "db" {
+		t.Errorf("hostb Projects = %v, want [db] from host_projects", got)
 	}
 }
 
@@ -127,8 +127,8 @@ func TestInstanceProjectStillValidatedFleetWide(t *testing.T) {
 // hosts/<host>/ directory is almost always a typo (the entry silently
 // never applies otherwise) — it must surface as a warning, not stay quiet.
 func TestHostProjectsTypoWarns(t *testing.T) {
-	dir := writeFleet(t, "host_projects:\n  hosta-typo:\n    - foxyutils\n", map[string]map[string]string{
-		"hosta": {"web-a": "unidoc"},
+	dir := writeFleet(t, "host_projects:\n  hosta-typo:\n    - db\n", map[string]map[string]string{
+		"hosta": {"web-a": "web"},
 	})
 	f, err := Load(dir, "hosta")
 	if err != nil {
@@ -150,8 +150,8 @@ func TestHostProjectsTypoWarns(t *testing.T) {
 // project.
 func TestCertProjectsIsHostScoped(t *testing.T) {
 	dir := writeFleet(t, "", map[string]map[string]string{
-		"hosta": {"web-a": "unidoc"},
-		"hostb": {"web-b": "foxyutils"},
+		"hosta": {"web-a": "web"},
+		"hostb": {"web-b": "db"},
 	})
 	fa, err := Load(dir, "hosta")
 	if err != nil {
@@ -159,11 +159,11 @@ func TestCertProjectsIsHostScoped(t *testing.T) {
 	}
 	got := fa.CertProjects()
 	for _, p := range got {
-		if p == "foxyutils" {
-			t.Errorf("hosta CertProjects = %v, must not include foxyutils", got)
+		if p == "db" {
+			t.Errorf("hosta CertProjects = %v, must not include db", got)
 		}
 	}
-	if !strings.Contains(strings.Join(got, ","), "unidoc") {
-		t.Errorf("hosta CertProjects = %v, want to include unidoc", got)
+	if !strings.Contains(strings.Join(got, ","), "web") {
+		t.Errorf("hosta CertProjects = %v, want to include web", got)
 	}
 }

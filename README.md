@@ -144,11 +144,11 @@ in `fleet.yaml`:
 
 ```yaml
 projects:
-  - unidoc
-  - foxyutils
+  - web
+  - db
 host_projects:
-  newhost:
-    - foxyutils   # newhost will use this project once instances land
+  host-c:
+    - db   # host-c will use this project once instances land
 ```
 
 See [docs/schema.md](docs/schema.md#host-scoped-projects) for the full
