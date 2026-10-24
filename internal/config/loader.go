@@ -37,9 +37,14 @@ import (
 // Fleet is the merged, resolved state for one host.
 type Fleet struct {
 	Host string
-	// Projects is the list of Incus projects this fleet manages
-	// (from fleet.yaml.projects). Populated by the loader. Every
-	// managed instance's project field must be in this list.
+	// Projects is the set of Incus projects THIS HOST needs: every
+	// project its own instances declare, unioned with any
+	// fleet.yaml host_projects[Host] entry. A project used only by
+	// another host never appears here, so diff/sync/list/orphans/
+	// doctor never query or manage a project this host may not even
+	// have (see narrowProjectsToHost). Every instance's project field
+	// is still validated against the fleet-wide `projects:` list at
+	// load time, before narrowing.
 	Projects []string
 	// NetworkProject is where ACLs + address-sets live (defaults to
 	// "default"). With features.networks=false on all managed projects,
@@ -142,6 +147,8 @@ func Load(fleetPath, host string) (*Fleet, error) {
 		{"host policies", func() error { return f.loadPolicyDir(filepath.Join(hostDir, "policies"), hostScope) }},
 		{"host instances", func() error { return f.loadInstanceDir(filepath.Join(hostDir, "instances")) }},
 		{"templates", func() error { return f.loadTemplates(filepath.Join(fleetPath, "templates")) }},
+		{"host project scope", func() error { return f.narrowProjectsToHost(meta) }},
+		{"host_projects typo check", func() error { f.checkHostProjectsKeys(meta); return nil }},
 	}
 
 	for _, step := range steps {
@@ -185,6 +192,85 @@ func (f *Fleet) checkNameOverlap() error {
 		}
 	}
 	return nil
+}
+
+// narrowProjectsToHost replaces f.Projects (the fleet-wide allowlist used
+// to validate each instance's `project:` field) with the set this one
+// host actually needs: projects its own instances use, unioned with
+// meta.HostProjects[f.Host]. A project only used on another host is
+// dropped here, so ComputePlan and the list/orphans/doctor commands never
+// query or manage a project this host may not have (or may not be
+// cert-authorized for) — see docs/schema.md#host-scoped-projects.
+//
+// Order follows meta.Projects so output stays stable regardless of map
+// iteration order.
+func (f *Fleet) narrowProjectsToHost(meta FleetMeta) error {
+	used := map[string]bool{}
+	for _, inst := range f.Instances {
+		used[inst.Project] = true
+	}
+	for _, p := range meta.HostProjects[f.Host] {
+		used[p] = true // already validated against meta.Projects in FleetMeta.Validate
+	}
+	out := make([]string, 0, len(used))
+	for _, p := range meta.Projects {
+		if used[p] {
+			out = append(out, p)
+		}
+	}
+	f.Projects = out
+	return nil
+}
+
+// checkHostProjectsKeys warns when fleet.yaml's host_projects names a
+// host with no hosts/<host>/ directory. Not fatal — pre-declaring a
+// project before `remote bootstrap <host>` creates that directory is a
+// legitimate ordering — but almost always a typo otherwise, and a typo
+// here is a silent no-op (meta.HostProjects[f.Host] just never matches),
+// so it is worth surfacing via validate instead of staying quiet.
+func (f *Fleet) checkHostProjectsKeys(meta FleetMeta) {
+	if len(meta.HostProjects) == 0 {
+		return
+	}
+	hosts, err := ListHosts(f.fleetPath)
+	if err != nil {
+		return
+	}
+	known := map[string]bool{}
+	for _, h := range hosts {
+		known[h] = true
+	}
+	badHosts := make([]string, 0, len(meta.HostProjects))
+	for h := range meta.HostProjects {
+		badHosts = append(badHosts, h)
+	}
+	sort.Strings(badHosts)
+	for _, h := range badHosts {
+		if !known[h] {
+			f.Warnings = append(f.Warnings, fmt.Sprintf(
+				"fleet.yaml host_projects references host %q, which has no hosts/%s/ directory — check for a typo, or bootstrap that host first",
+				h, h))
+		}
+	}
+}
+
+// CertProjects returns NetworkProject + this host's effective Projects,
+// deduplicated — the --projects scope a remote cert for THIS host needs.
+func (f *Fleet) CertProjects() []string {
+	seen := map[string]bool{}
+	out := []string{}
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	add(f.NetworkProject)
+	for _, p := range f.Projects {
+		add(p)
+	}
+	return out
 }
 
 func (f *Fleet) claim(kind, name, path string) error {
@@ -369,7 +455,9 @@ func (f *Fleet) loadInstanceDir(dir string) error {
 					"(must be one of %v)",
 				path, inst.Name, f.Projects)
 		}
-		// Enforce project allowlist.
+		// Enforce project allowlist against the fleet-wide list. f.Projects
+		// is still that fleet-wide list here — narrowProjectsToHost runs
+		// only after every instance in this host is loaded.
 		ok := false
 		for _, p := range f.Projects {
 			if p == inst.Project {

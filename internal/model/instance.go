@@ -34,10 +34,12 @@ import (
 type Instance struct {
 	Name        string `yaml:"instance"`
 	Description string `yaml:"description,omitempty"`
-	// Project is the Incus project this instance belongs to. Optional
-	// in YAML; the loader defaults to the fleet's default_project when
-	// omitted. Different projects on the same host give logical
-	// separation with the operator's own cert scoped to all of them.
+	// Project is the Incus project this instance belongs to. Required —
+	// the loader rejects a missing value with no silent default. Must
+	// appear in fleet.yaml's `projects:` list; the host this instance
+	// lives under is scoped to exactly the projects its own instances
+	// use (see docs/schema.md#host-scoped-projects), so a project used
+	// only here never leaks onto another host's queries.
 	Project string `yaml:"project,omitempty"`
 	// Type is "container" (the default) or "virtual-machine". Only consulted on
 	// create: an existing instance keeps the type it has.
