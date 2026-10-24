@@ -42,13 +42,15 @@ in Incus but not in the fleet are shown as "unmanaged".`,
 			if err != nil {
 				return err
 			}
-			// Iterate every managed project; live containers may live
-			// in any of them. --project filter narrows the output.
+			// Default: every project this host manages. --project
+			// queries exactly that one project instead, even if this
+			// host hasn't narrowed to it yet (see projectsToQuery).
+			projects, err := projectsToQuery(fleetPath, fleet, project)
+			if err != nil {
+				return err
+			}
 			var liveInsts []api.InstanceFull
-			for _, p := range fleet.Projects {
-				if project != "" && project != p {
-					continue
-				}
+			for _, p := range projects {
 				scoped := srv.UseProject(p)
 				got, err := scoped.GetInstancesFull(api.InstanceTypeAny)
 				if err != nil {
@@ -62,7 +64,7 @@ in Incus but not in the fleet are shown as "unmanaged".`,
 	cmd.Flags().StringVar(&host, "host", "", "Host name (required; see `remote list`)")
 	_ = cmd.RegisterFlagCompletionFunc("host", hostCompleter)
 	cmd.Flags().StringVar(&socketPath, "socket", incus.DefaultSocket, "Incus unix socket path")
-	cmd.Flags().StringVar(&project, "project", "", "Incus project (default: fleet.yaml or `default`)")
+	cmd.Flags().StringVar(&project, "project", "", "Query exactly this Incus project instead of every project this host manages (must be in fleet.yaml's `projects:` list)")
 	return cmd
 }
 

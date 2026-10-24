@@ -93,6 +93,38 @@ func resolveProject(flagValue string) (string, error) {
 		meta.Projects)
 }
 
+// projectsToQuery returns the projects a multi-project command (list,
+// orphans) should contact for one --host run:
+//
+//   - explicitProject == "": fleet.Projects — this host's effective set
+//     (already narrowed to what its own instances/host_projects use;
+//     see config.Fleet.Projects).
+//   - explicitProject != "": exactly that one project, regardless of
+//     whether this host's narrowed set happens to include it. --project
+//     is an override, not a filter on the narrowed set — a host that
+//     hasn't declared any instance in a project yet must still be able
+//     to query it explicitly, otherwise `--project X` where X isn't
+//     (yet) in fleet.Projects silently reports "nothing found" instead
+//     of actually querying X. Still validated against fleet.yaml's
+//     fleet-wide `projects:` list, so a typo is a hard error, not a
+//     query against a project the fleet doesn't even declare.
+func projectsToQuery(fleetPath string, fleet *config.Fleet, explicitProject string) ([]string, error) {
+	if explicitProject == "" {
+		return fleet.Projects, nil
+	}
+	meta, err := config.LoadFleetMeta(fleetPath)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range meta.Projects {
+		if p == explicitProject {
+			return []string{explicitProject}, nil
+		}
+	}
+	return nil, fmt.Errorf(
+		"--project %q is not in fleet.yaml's `projects:` list %v", explicitProject, meta.Projects)
+}
+
 // shortHostname returns the local short hostname, or "" if it can't be read.
 func shortHostname() string {
 	h, err := os.Hostname()
