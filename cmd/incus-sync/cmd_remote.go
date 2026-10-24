@@ -162,6 +162,26 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
+	// hosts/<host>/ must exist before config.Load can read it — mkdir is
+	// harmless/idempotent even if nothing further gets written there.
+	dir := filepath.Join(fleetPath, "hosts", host)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	// Load (and compute the cert's project scope) BEFORE writing
+	// remote.sops.yaml: an unrelated fleet validation error must fail
+	// here, not leave a secret file written with no success message or
+	// cert PEM ever printed.
+	fleet, err := config.Load(fleetPath, host)
+	if err != nil {
+		return err
+	}
+	// Cert needs access to BOTH the network project (where ACLs and
+	// address-sets live) AND every project this host manages.
+	// `CertProjects` unions them and removes duplicates.
+	certProjects := strings.Join(fleet.CertProjects(), ",")
+
 	// Compose remote YAML.
 	normalisedFP := strings.ToLower(strings.ReplaceAll(fingerprint, ":", ""))
 	remoteYAML := struct {
@@ -180,10 +200,6 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 		return err
 	}
 
-	dir := filepath.Join(fleetPath, "hosts", host)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
 	path := filepath.Join(dir, "remote.sops.yaml")
 
 	// Pipe plaintext through sops stdin → capture encrypted stdout →
@@ -212,21 +228,8 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 
 	// Diagnostics to stderr, cert PEM to stdout — so caller can pipe
 	// stdout to `ssh ... 'incus config trust add-certificate -'`.
-	//
-	// hosts/<host>/ now exists (created above), so Load can compute this
-	// host's effective project set: its own instances' projects, plus any
-	// fleet.yaml host_projects[host] entry. A brand-new host with no
-	// instances yet and no host_projects entry gets only NetworkProject —
-	// add a host_projects entry first if the cert needs a project before
-	// any instance declares it.
-	fleet, err := config.Load(fleetPath, host)
-	if err != nil {
-		return err
-	}
-	// Cert needs access to BOTH the network project (where ACLs and
-	// address-sets live) AND every project this host manages.
-	// `CertProjects` unions them and removes duplicates.
-	certProjects := strings.Join(fleet.CertProjects(), ",")
+	// fleet and certProjects were computed up front, before writing the
+	// secret file — see the comment above.
 	if len(fleet.Projects) == 0 {
 		fmt.Fprintf(os.Stderr,
 			"NOTE: %s has no instances yet and no fleet.yaml host_projects entry, so the\n"+
