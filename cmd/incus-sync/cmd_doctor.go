@@ -136,18 +136,23 @@ func runDeepChecks(host string) bool {
 		return false
 	}
 
-	// Verify every project declared in fleet.yaml exists on the host.
-	meta, err := config.LoadFleetMeta(fleetPath)
+	// Verify every project THIS HOST needs exists there — its own
+	// instances' projects, plus any fleet.yaml host_projects entry.
+	// A project only used on another host is never checked here.
+	fleet, err := config.Load(fleetPath, host)
 	if err != nil {
-		fmt.Printf("fleet.yaml       ERROR: %v\n", err)
+		fmt.Printf("fleet load       ERROR: %v\n", err)
 		return false
+	}
+	if len(fleet.Projects) == 0 {
+		fmt.Println("project list     (host declares no instances and no host_projects entry — nothing to check)")
 	}
 	projects, err := srv.GetProjectNames()
 	if err != nil {
 		fmt.Printf("project list     ERROR: %v\n", err)
 		ok = false
 	} else {
-		for _, want := range meta.Projects {
+		for _, want := range fleet.Projects {
 			if contains(projects, want) {
 				fmt.Printf("project %-12s present\n", want)
 			} else {
@@ -158,7 +163,7 @@ func runDeepChecks(host string) bool {
 	}
 	// Profile / network checks run in NetworkProject scope (where
 	// bridges and shared ACLs actually live).
-	srv = srv.UseProject(meta.NetworkProject)
+	srv = srv.UseProject(fleet.NetworkProject)
 
 	profiles, err := srv.GetProfileNames()
 	if err != nil {

@@ -162,6 +162,26 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
+	// hosts/<host>/ must exist before config.Load can read it — mkdir is
+	// harmless/idempotent even if nothing further gets written there.
+	dir := filepath.Join(fleetPath, "hosts", host)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	// Load (and compute the cert's project scope) BEFORE writing
+	// remote.sops.yaml: an unrelated fleet validation error must fail
+	// here, not leave a secret file written with no success message or
+	// cert PEM ever printed.
+	fleet, err := config.Load(fleetPath, host)
+	if err != nil {
+		return err
+	}
+	// Cert needs access to BOTH the network project (where ACLs and
+	// address-sets live) AND every project this host manages.
+	// `CertProjects` unions them and removes duplicates.
+	certProjects := strings.Join(fleet.CertProjects(), ",")
+
 	// Compose remote YAML.
 	normalisedFP := strings.ToLower(strings.ReplaceAll(fingerprint, ":", ""))
 	remoteYAML := struct {
@@ -180,10 +200,6 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 		return err
 	}
 
-	dir := filepath.Join(fleetPath, "hosts", host)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
 	path := filepath.Join(dir, "remote.sops.yaml")
 
 	// Pipe plaintext through sops stdin → capture encrypted stdout →
@@ -212,21 +228,23 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 
 	// Diagnostics to stderr, cert PEM to stdout — so caller can pipe
 	// stdout to `ssh ... 'incus config trust add-certificate -'`.
-	meta, err := config.LoadFleetMeta(fleetPath)
-	if err != nil {
-		return err
+	// fleet and certProjects were computed up front, before writing the
+	// secret file — see the comment above.
+	if len(fleet.Projects) == 0 {
+		fmt.Fprintf(os.Stderr,
+			"NOTE: %s has no instances yet and no fleet.yaml host_projects entry, so the\n"+
+				"cert below is scoped to %q only. Add `host_projects: {%s: [<project>]}` to\n"+
+				"fleet.yaml and re-run bootstrap if an instance will land in another project —\n"+
+				"otherwise sync will fail auth once it does.\n\n",
+			host, fleet.NetworkProject, host)
 	}
-	// Cert needs access to BOTH the network project (where ACLs and
-	// address-sets live) AND every managed project (where containers
-	// live). `CertProjects` unions them and removes duplicates.
-	certProjects := strings.Join(meta.CertProjects(), ",")
 	fmt.Fprintf(os.Stderr, "Wrote encrypted %s\n", path)
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Client cert PEM is on stdout. Register with Incus on the target host:")
 	fmt.Fprintf(os.Stderr, "  incus config trust add-certificate - --name gateway-bastion --restricted --projects %s\n", certProjects)
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Ensure every managed project exists first on the target:")
-	for _, p := range meta.Projects {
+	for _, p := range fleet.Projects {
 		fmt.Fprintf(os.Stderr, "  incus project create %s\n", p)
 	}
 	fmt.Fprintln(os.Stderr, "")

@@ -126,6 +126,35 @@ Full schema: [docs/schema.md](docs/schema.md). Complete runnable
 example: [examples/minimal-fleet](examples/minimal-fleet) — clone it,
 run `validate`/`render`/`explain` against it, no Incus daemon needed.
 
+## Projects
+
+`fleet.yaml`'s `projects:` list is fleet-wide: every instance's
+`project:` field must appear in it. But each host only ever
+queries/manages the projects its own instances actually use — a project
+only declared on host A is never contacted on host B's `diff`/`sync`/
+`list`/`orphans`/`doctor`, and a host B remote cert is never scoped to
+it. This matters once two hosts manage different, non-overlapping
+Incus projects: without it, every host would need every fleet-wide
+project to exist (and be cert-authorized) on its own Incus daemon, even
+for projects it never touches.
+
+To pre-declare a project for a host before any instance on it uses one
+yet (e.g. bootstrapping a brand-new host), add it under `host_projects:`
+in `fleet.yaml`:
+
+```yaml
+projects:
+  - web
+  - db
+host_projects:
+  host-c:
+    - db   # host-c will use this project once instances land
+```
+
+See [docs/schema.md](docs/schema.md#host-scoped-projects) for the full
+rule. Most fleets never need `host_projects` — it only matters once a
+project is scoped to a subset of hosts.
+
 ## Instance file (Option 4 flat form)
 
 ```yaml

@@ -10,9 +10,12 @@ One per repo, at the root. Not a per-object file — declares fleet-wide
 metadata.
 
 ```yaml
-projects:                 # every Incus project this fleet manages (required)
+projects:                 # every Incus project this fleet manages, fleet-wide (required)
   - <project>...
 network_project: <string> # optional; where ACLs/address-sets live (default "default")
+host_projects:             # optional; see "Host-scoped projects" below
+  <host>:
+    - <project>...
 ```
 
 There is no `name:` field — a fleet is identified purely by its
@@ -21,6 +24,32 @@ kept unique across fleets. Secret decryption is scoped entirely by
 `.sops.yaml`'s own recipient list, not by anything incus-sync tracks —
 see [README.md's Auth section](../README.md#auth) and
 `internal/vault`'s package doc.
+
+### Host-scoped projects
+
+`projects:` is the fleet-wide allowlist — every instance's `project:`
+field must appear somewhere in it. But a given host only ever
+queries/manages the subset it actually needs: the projects its own
+`hosts/<host>/instances/*/instance.yaml` files declare, unioned with
+its `host_projects` entry (if any). A project used only by host A never
+shows up in host B's project list — `diff`/`sync --host B` does not
+query it, and `remote bootstrap B` does not request cert access to it.
+
+`host_projects` exists only to pre-declare a project before any
+instance on that host uses it yet — e.g. running `doctor --deep` or
+`remote bootstrap` against a brand-new host before its first instance
+file is committed. Every project listed there must also be in the
+top-level `projects:` list (hard error otherwise), and every key must
+name a host that has a `hosts/<host>/` directory (warning otherwise —
+almost always a typo). Most fleets never need it — the common
+single-project, single-or-multi-host case narrows to the same project
+everywhere automatically, so existing fleets behave exactly as before.
+
+One tradeoff: `list`/`orphans` on a host only scan the projects in its
+effective set. A project with zero fleet instances on that host — say,
+containers created by hand ahead of writing their instance files — is
+invisible to `list`/`orphans` there until either the first instance
+file lands or a `host_projects` entry names it.
 
 ## .sops.yaml
 
