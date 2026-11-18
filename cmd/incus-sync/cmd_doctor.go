@@ -152,13 +152,12 @@ func runDeepChecks(host string) bool {
 		fmt.Printf("project list     ERROR: %v\n", err)
 		ok = false
 	} else {
-		for _, want := range fleet.Projects {
-			if contains(projects, want) {
-				fmt.Printf("project %-12s present\n", want)
-			} else {
-				fmt.Printf("project %-12s MISSING — run `incus project create %s` on the host\n", want, want)
-				ok = false
-			}
+		lines, allPresent := checkProjects(fleet.Projects, projects)
+		for _, l := range lines {
+			fmt.Println(l)
+		}
+		if !allPresent {
+			ok = false
 		}
 	}
 	// Profile / network checks run in NetworkProject scope (where
@@ -252,4 +251,23 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// checkProjects reports, one line each, whether every project this host
+// needs is among the projects the server lists to this client. A
+// restricted cert only sees the projects it is allowed, so "not listed"
+// means missing on the host OR outside this cert's scope.
+func checkProjects(want, have []string) (lines []string, ok bool) {
+	ok = true
+	for _, p := range want {
+		if contains(have, p) {
+			lines = append(lines, fmt.Sprintf("project %-12s present", p))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf(
+			"project %-12s MISSING or not visible to this cert — create it with `incus project create %s`, or add it to the cert's projects with `incus config trust edit <fingerprint>`",
+			p, p))
+		ok = false
+	}
+	return lines, ok
 }

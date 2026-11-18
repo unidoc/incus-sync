@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -40,9 +41,10 @@ type Fleet struct {
 	// Projects is the set of Incus projects THIS HOST needs: every
 	// project its own instances declare, unioned with any
 	// fleet.yaml host_projects[Host] entry. A project used only by
-	// another host never appears here, so diff/sync/list/orphans/
-	// doctor never query or manage a project this host may not even
-	// have (see narrowProjectsToHost). Every instance's project field
+	// another host never appears here, so diff/sync/doctor and the
+	// remote cert never query, manage or ask for a project this host
+	// may not even have (see narrowProjectsToHost). list/orphans
+	// deliberately look wider: see projectsToQuery in cmd/incus-sync. Every instance's project field
 	// is still validated against the fleet-wide `projects:` list at
 	// load time, before narrowing.
 	Projects []string
@@ -148,7 +150,6 @@ func Load(fleetPath, host string) (*Fleet, error) {
 		{"host instances", func() error { return f.loadInstanceDir(filepath.Join(hostDir, "instances")) }},
 		{"templates", func() error { return f.loadTemplates(filepath.Join(fleetPath, "templates")) }},
 		{"host project scope", func() error { return f.narrowProjectsToHost(meta) }},
-		{"host_projects typo check", func() error { f.checkHostProjectsKeys(meta); return nil }},
 	}
 
 	for _, step := range steps {
@@ -198,8 +199,8 @@ func (f *Fleet) checkNameOverlap() error {
 // to validate each instance's `project:` field) with the set this one
 // host actually needs: projects its own instances use, unioned with
 // meta.HostProjects[f.Host]. A project only used on another host is
-// dropped here, so ComputePlan and the list/orphans/doctor commands never
-// query or manage a project this host may not have (or may not be
+// dropped here, so ComputePlan, doctor and the remote cert never query,
+// manage or ask for a project this host may not have (or may not be
 // cert-authorized for) — see docs/schema.md#host-scoped-projects.
 //
 // Order follows meta.Projects so output stays stable regardless of map
@@ -222,36 +223,41 @@ func (f *Fleet) narrowProjectsToHost(meta FleetMeta) error {
 	return nil
 }
 
-// checkHostProjectsKeys warns when fleet.yaml's host_projects names a
-// host with no hosts/<host>/ directory. Not fatal — pre-declaring a
-// project before `remote bootstrap <host>` creates that directory is a
-// legitimate ordering — but almost always a typo otherwise, and a typo
-// here is a silent no-op (meta.HostProjects[f.Host] just never matches),
-// so it is worth surfacing via validate instead of staying quiet.
-func (f *Fleet) checkHostProjectsKeys(meta FleetMeta) {
-	if len(meta.HostProjects) == 0 {
-		return
-	}
-	hosts, err := ListHosts(f.fleetPath)
+// CheckHostProjectsKeys returns a warning for each fleet.yaml
+// host_projects key that names a host with no hosts/<host>/ directory.
+// Not fatal: pre-declaring a project before `remote bootstrap <host>`
+// creates that directory is a legitimate ordering. But it is otherwise
+// almost always a typo, and a typo there is a silent no-op.
+//
+// It is a fleet-wide check, so `validate` runs it once rather than Load
+// running it for every host: inside Load it would put a risk flag about
+// one host on every other host's diff and sync --apply.
+func CheckHostProjectsKeys(fleetPath string) ([]string, error) {
+	meta, err := LoadFleetMeta(fleetPath)
 	if err != nil {
-		return
+		return nil, err
 	}
-	known := map[string]bool{}
-	for _, h := range hosts {
-		known[h] = true
+	if len(meta.HostProjects) == 0 {
+		return nil, nil
 	}
-	badHosts := make([]string, 0, len(meta.HostProjects))
+	hosts, err := ListHosts(fleetPath)
+	if err != nil {
+		return nil, fmt.Errorf("check host_projects keys: %w", err)
+	}
+	keys := make([]string, 0, len(meta.HostProjects))
 	for h := range meta.HostProjects {
-		badHosts = append(badHosts, h)
+		keys = append(keys, h)
 	}
-	sort.Strings(badHosts)
-	for _, h := range badHosts {
-		if !known[h] {
-			f.Warnings = append(f.Warnings, fmt.Sprintf(
+	sort.Strings(keys)
+	var warnings []string
+	for _, h := range keys {
+		if !slices.Contains(hosts, h) {
+			warnings = append(warnings, fmt.Sprintf(
 				"fleet.yaml host_projects references host %q, which has no hosts/%s/ directory — check for a typo, or bootstrap that host first",
 				h, h))
 		}
 	}
+	return warnings, nil
 }
 
 // CertProjects returns NetworkProject + this host's effective Projects,

@@ -28,6 +28,17 @@ any fails, the whole command exits non-zero after the summary.
 
 Read-only. Safe to run as a pre-commit hook or in CI.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Fleet-wide check, run once rather than per host.
+			keyWarnings, err := config.CheckHostProjectsKeys(fleetPath)
+			if err != nil {
+				return err
+			}
+			for _, w := range keyWarnings {
+				fmt.Fprintln(os.Stderr, w)
+			}
+			if len(keyWarnings) > 0 {
+				fmt.Fprintln(os.Stderr)
+			}
 			if host != "" {
 				return validateOne(host)
 			}

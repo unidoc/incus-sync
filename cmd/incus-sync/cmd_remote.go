@@ -130,7 +130,7 @@ Full flow:
 	return cmd
 }
 
-func runRemoteBootstrap(host, url, fingerprint string) error {
+func runRemoteBootstrap(host, url, fingerprint string) (err error) {
 	// Fail fast if sops isn't on PATH — otherwise we'd write plaintext
 	// certs to disk with no way to encrypt them cleanly.
 	sopsPath, err := exec.LookPath("sops")
@@ -162,21 +162,21 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
-	// hosts/<host>/ must exist before config.Load can read it — mkdir is
-	// harmless/idempotent even if nothing further gets written there.
-	dir := filepath.Join(fleetPath, "hosts", host)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-
 	// Load (and compute the cert's project scope) BEFORE writing
 	// remote.sops.yaml: an unrelated fleet validation error must fail
 	// here, not leave a secret file written with no success message or
 	// cert PEM ever printed.
-	fleet, err := config.Load(fleetPath, host)
+	fleet, dir, created, err := loadFleetForBootstrap(fleetPath, host)
 	if err != nil {
 		return err
 	}
+	// If anything below fails, leave the fleet repo as it was: remove
+	// hosts/<host>/ again if this run created it and it is still empty.
+	defer func() {
+		if err != nil && created {
+			_ = os.Remove(dir)
+		}
+	}()
 	// Cert needs access to BOTH the network project (where ACLs and
 	// address-sets live) AND every project this host manages.
 	// `CertProjects` unions them and removes duplicates.
@@ -233,9 +233,12 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 	if len(fleet.Projects) == 0 {
 		fmt.Fprintf(os.Stderr,
 			"NOTE: %s has no instances yet and no fleet.yaml host_projects entry, so the\n"+
-				"cert below is scoped to %q only. Add `host_projects: {%s: [<project>]}` to\n"+
-				"fleet.yaml and re-run bootstrap if an instance will land in another project —\n"+
-				"otherwise sync will fail auth once it does.\n\n",
+				"cert below is scoped to %q only, and sync will fail with an authorization\n"+
+				"error once an instance lands in another project. Either add\n"+
+				"`host_projects: {%s: [<project>]}` to fleet.yaml now and re-run bootstrap\n"+
+				"(that makes a NEW key and cert, which you register instead of this one), or\n"+
+				"later add the project to this cert's `projects:` on the host with\n"+
+				"`incus config trust edit <fingerprint>`.\n\n",
 			host, fleet.NetworkProject, host)
 	}
 	fmt.Fprintf(os.Stderr, "Wrote encrypted %s\n", path)
@@ -255,4 +258,28 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 		return err
 	}
 	return nil
+}
+
+// loadFleetForBootstrap loads the fleet for a host that may not have a
+// hosts/<host>/ directory yet. config.Load requires that directory, so
+// it is created first; created reports whether this call made it. If
+// the load fails, a directory this call created is removed again, so a
+// failed bootstrap does not leave an empty hosts/<host>/ behind (which
+// would also hide a host_projects typo for that name from validate).
+func loadFleetForBootstrap(fleetPath, host string) (fleet *config.Fleet, dir string, created bool, err error) {
+	dir = filepath.Join(fleetPath, "hosts", host)
+	if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+		created = true
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, "", false, err
+	}
+	fleet, err = config.Load(fleetPath, host)
+	if err != nil {
+		if created {
+			_ = os.Remove(dir)
+		}
+		return nil, "", false, err
+	}
+	return fleet, dir, created, nil
 }

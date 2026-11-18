@@ -28,28 +28,38 @@ see [README.md's Auth section](../README.md#auth) and
 ### Host-scoped projects
 
 `projects:` is the fleet-wide allowlist — every instance's `project:`
-field must appear somewhere in it. But a given host only ever
-queries/manages the subset it actually needs: the projects its own
-`hosts/<host>/instances/*/instance.yaml` files declare, unioned with
-its `host_projects` entry (if any). A project used only by host A never
-shows up in host B's project list — `diff`/`sync --host B` does not
-query it, and `remote bootstrap B` does not request cert access to it.
+field must appear somewhere in it. But a given host's `diff`, `sync`,
+`doctor --deep` and remote cert only use the subset it actually needs:
+the projects its own `hosts/<host>/instances/*/instance.yaml` files
+declare, unioned with its `host_projects` entry (if any). A project used
+only by host A never shows up there for host B — `diff`/`sync --host B`
+does not query it, and `remote bootstrap B` does not request cert access
+to it.
+
+`list` and `orphans` are read-only and look wider on purpose: by default
+they check every project in `projects:` that the host has, so containers
+with no instance file yet (the ones `orphans` exists to find) still
+show. They print which projects they checked and which fleet projects
+the host does not have or its cert cannot see. `--project <name>`
+checks exactly that project.
 
 `host_projects` exists only to pre-declare a project before any
 instance on that host uses it yet — e.g. running `doctor --deep` or
 `remote bootstrap` against a brand-new host before its first instance
 file is committed. Every project listed there must also be in the
-top-level `projects:` list (hard error otherwise), and every key must
-name a host that has a `hosts/<host>/` directory (warning otherwise —
-almost always a typo). Most fleets never need it — the common
-single-project, single-or-multi-host case narrows to the same project
-everywhere automatically, so existing fleets behave exactly as before.
+top-level `projects:` list (hard error otherwise). `validate` warns
+about a key that names a host with no `hosts/<host>/` directory, which
+is almost always a typo. Most fleets never need it: in a fleet where
+every host already has instances in the projects it uses, the scope is
+derived automatically.
 
-One tradeoff: `list`/`orphans` on a host only scan the projects in its
-effective set. A project with zero fleet instances on that host — say,
-containers created by hand ahead of writing their instance files — is
-invisible to `list`/`orphans` there until either the first instance
-file lands or a `host_projects` entry names it.
+When an existing host gets its first instance in a project its cert was
+not scoped for, `sync` fails with an authorization error from Incus.
+`doctor --deep` shows that project as missing or not visible to the
+cert. Widen the cert on the host (`incus config trust edit
+<fingerprint>`, add the project to `projects:`), or re-run `remote
+bootstrap`, which makes a new key and cert that must be registered in
+place of the old one.
 
 ## .sops.yaml
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"gopkg.in/yaml.v3"
 )
@@ -19,9 +20,9 @@ type FleetMeta struct {
 	// Projects is the explicit list of Incus projects this fleet
 	// manages, fleet-wide. REQUIRED — no silent defaults. Every
 	// instance's project: field must appear in this list. A given
-	// host only ever queries/manages the subset of Projects its own
-	// instances (plus HostProjects) actually use — see
-	// Fleet.Projects in loader.go.
+	// host's diff/sync/doctor and remote cert only use the subset of
+	// Projects its own instances (plus HostProjects) actually use —
+	// see Fleet.Projects in loader.go.
 	Projects []string `yaml:"projects"`
 
 	// NetworkProject is where network ACLs + address-sets physically
@@ -51,22 +52,13 @@ func (m FleetMeta) Validate() error {
 	}
 	for host, projs := range m.HostProjects {
 		for _, p := range projs {
-			if !stringInSlice(m.Projects, p) {
+			if !slices.Contains(m.Projects, p) {
 				return fmt.Errorf("%s: host_projects[%s] lists project %q, which is not in the top-level `projects:` list %v",
 					FleetMetaFilename, host, p, m.Projects)
 			}
 		}
 	}
 	return nil
-}
-
-func stringInSlice(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
 }
 
 // LoadFleetMeta reads fleet.yaml at fleetPath root. The file is

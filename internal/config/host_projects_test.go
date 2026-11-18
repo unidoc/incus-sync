@@ -125,23 +125,35 @@ func TestInstanceProjectStillValidatedFleetWide(t *testing.T) {
 
 // TestHostProjectsTypoWarns: a host_projects key with no matching
 // hosts/<host>/ directory is almost always a typo (the entry silently
-// never applies otherwise) — it must surface as a warning, not stay quiet.
+// never applies otherwise) — CheckHostProjectsKeys must name it.
 func TestHostProjectsTypoWarns(t *testing.T) {
 	dir := writeFleet(t, "host_projects:\n  hosta-typo:\n    - db\n", map[string]map[string]string{
+		"hosta": {"web-a": "web"},
+	})
+	warnings, err := CheckHostProjectsKeys(dir)
+	if err != nil {
+		t.Fatalf("CheckHostProjectsKeys: %v", err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "hosta-typo") {
+		t.Errorf("expected one warning naming %q, got %v", "hosta-typo", warnings)
+	}
+}
+
+// TestHostProjectsKeyDoesNotWarnOnLoad: a key for a host that is not
+// bootstrapped yet must not put a warning on other hosts' Load (it
+// would show as a risk flag on their diff and sync --apply).
+func TestHostProjectsKeyDoesNotWarnOnLoad(t *testing.T) {
+	dir := writeFleet(t, "host_projects:\n  hostc:\n    - db\n", map[string]map[string]string{
 		"hosta": {"web-a": "web"},
 	})
 	f, err := Load(dir, "hosta")
 	if err != nil {
 		t.Fatalf("Load(hosta): %v", err)
 	}
-	found := false
 	for _, w := range f.Warnings {
-		if strings.Contains(w, "hosta-typo") {
-			found = true
+		if strings.Contains(w, "hostc") {
+			t.Errorf("hosta's Load warned about another host's host_projects key: %q", w)
 		}
-	}
-	if !found {
-		t.Errorf("expected a warning naming the unknown host_projects key %q, got %v", "hosta-typo", f.Warnings)
 	}
 }
 

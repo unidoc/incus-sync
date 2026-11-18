@@ -17,6 +17,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -93,36 +95,65 @@ func resolveProject(flagValue string) (string, error) {
 		meta.Projects)
 }
 
-// projectsToQuery returns the projects a multi-project command (list,
-// orphans) should contact for one --host run:
+// projectLister is the one server call projectsToQuery needs, so tests
+// can pass a fake instead of a live Incus connection.
+type projectLister interface {
+	GetProjectNames() ([]string, error)
+}
+
+// projectsToQuery returns the projects a read-only, multi-project command
+// (list, orphans) should look in for one --host run, and the fleet-wide
+// projects it skipped because the host does not have them.
 //
-//   - explicitProject == "": fleet.Projects — this host's effective set
-//     (already narrowed to what its own instances/host_projects use;
-//     see config.Fleet.Projects).
-//   - explicitProject != "": exactly that one project, regardless of
-//     whether this host's narrowed set happens to include it. --project
-//     is an override, not a filter on the narrowed set — a host that
-//     hasn't declared any instance in a project yet must still be able
-//     to query it explicitly, otherwise `--project X` where X isn't
-//     (yet) in fleet.Projects silently reports "nothing found" instead
-//     of actually querying X. Still validated against fleet.yaml's
-//     fleet-wide `projects:` list, so a typo is a hard error, not a
-//     query against a project the fleet doesn't even declare.
-func projectsToQuery(fleetPath string, fleet *config.Fleet, explicitProject string) ([]string, error) {
-	if explicitProject == "" {
-		return fleet.Projects, nil
-	}
+//   - explicitProject == "": every project in fleet.yaml's fleet-wide
+//     `projects:` list that the host actually has (as the server reports
+//     it to this client). This is deliberately NOT the host-narrowed
+//     fleet.Projects: list/orphans exist to find containers that have no
+//     instance file yet, which is exactly when the narrowed set is empty
+//     or missing the project. A project the host does not have (or that
+//     this client's cert cannot see) is returned in skipped, so callers
+//     can say what they did not look at.
+//   - explicitProject != "": exactly that project, after checking it is
+//     in the fleet-wide `projects:` list (a typo is a hard error). The
+//     server is not asked, so a missing project fails loudly on query.
+func projectsToQuery(fleetPath string, srv projectLister, explicitProject string) (query, skipped []string, err error) {
 	meta, err := config.LoadFleetMeta(fleetPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if explicitProject != "" {
+		if !slices.Contains(meta.Projects, explicitProject) {
+			return nil, nil, fmt.Errorf(
+				"--project %q is not in fleet.yaml's `projects:` list %v", explicitProject, meta.Projects)
+		}
+		return []string{explicitProject}, nil, nil
+	}
+	have, err := srv.GetProjectNames()
+	if err != nil {
+		return nil, nil, fmt.Errorf("list projects on host: %w", err)
 	}
 	for _, p := range meta.Projects {
-		if p == explicitProject {
-			return []string{explicitProject}, nil
+		if slices.Contains(have, p) {
+			query = append(query, p)
+		} else {
+			skipped = append(skipped, p)
 		}
 	}
-	return nil, fmt.Errorf(
-		"--project %q is not in fleet.yaml's `projects:` list %v", explicitProject, meta.Projects)
+	return query, skipped, nil
+}
+
+// printProjectScope tells the operator which projects a list/orphans run
+// looked in, and which fleet projects it could not, on stderr so stdout
+// stays the table.
+func printProjectScope(host string, query, skipped []string) {
+	if len(query) == 0 {
+		fmt.Fprintf(os.Stderr, "Checked no projects on %s.\n", host)
+	} else {
+		fmt.Fprintf(os.Stderr, "Checked projects on %s: %s\n", host, strings.Join(query, ", "))
+	}
+	if len(skipped) > 0 {
+		fmt.Fprintf(os.Stderr, "Not on %s (or not visible to its cert): %s\n", host, strings.Join(skipped, ", "))
+	}
 }
 
 // shortHostname returns the local short hostname, or "" if it can't be read.

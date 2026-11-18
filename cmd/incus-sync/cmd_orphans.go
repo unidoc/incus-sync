@@ -56,13 +56,15 @@ under fleet control. Nothing is mutated.`,
 			if err != nil {
 				return err
 			}
-			// Default: sweep every project this host manages. --project
-			// queries exactly that one project instead, even if this
-			// host hasn't narrowed to it yet (see projectsToQuery).
-			projects, err := projectsToQuery(fleetPath, fleet, project)
+			// Default: every fleet-wide project the host has, not just
+			// the ones this host's instance files use, so containers
+			// with no instance file yet still show. --project queries
+			// exactly that project (see projectsToQuery).
+			projects, skipped, err := projectsToQuery(fleetPath, srv, project)
 			if err != nil {
 				return err
 			}
+			printProjectScope(host, projects, skipped)
 			var live []api.InstanceFull
 			for _, p := range projects {
 				scoped := srv.UseProject(p)
@@ -72,17 +74,17 @@ under fleet control. Nothing is mutated.`,
 				}
 				live = append(live, got...)
 			}
-			return runOrphans(fleet, live, host)
+			return runOrphans(fleet, live, host, projects)
 		},
 	}
 	cmd.Flags().StringVar(&host, "host", "", "Host name (required; see `remote list`)")
 	_ = cmd.RegisterFlagCompletionFunc("host", hostCompleter)
 	cmd.Flags().StringVar(&socketPath, "socket", incus.DefaultSocket, "Incus unix socket path (local target only)")
-	cmd.Flags().StringVar(&project, "project", "", "Query exactly this Incus project instead of every project this host manages (must be in fleet.yaml's `projects:` list)")
+	cmd.Flags().StringVar(&project, "project", "", "Query exactly this Incus project instead of every fleet.yaml project the host has (must be in fleet.yaml's projects list)")
 	return cmd
 }
 
-func runOrphans(fleet *config.Fleet, live []api.InstanceFull, host string) error {
+func runOrphans(fleet *config.Fleet, live []api.InstanceFull, host string, checked []string) error {
 	managed := map[string]bool{}
 	for name := range fleet.Instances {
 		managed[name] = true
@@ -96,8 +98,13 @@ func runOrphans(fleet *config.Fleet, live []api.InstanceFull, host string) error
 	}
 	sort.Slice(orphans, func(i, j int) bool { return orphans[i].Name < orphans[j].Name })
 
+	if len(checked) == 0 {
+		// Nothing was looked at, so there is nothing to vouch for.
+		fmt.Printf("No projects checked on %s — cannot say whether it has orphans.\n", host)
+		return nil
+	}
 	if len(orphans) == 0 {
-		fmt.Printf("No orphans on %s — every container is under fleet control.\n", host)
+		fmt.Printf("No orphans on %s in %s — every container there is under fleet control.\n", host, strings.Join(checked, ", "))
 		return nil
 	}
 
