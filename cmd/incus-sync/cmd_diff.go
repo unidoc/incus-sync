@@ -73,7 +73,7 @@ Formats:
 	cmd.Flags().StringVar(&host, "host", "", "Host name (required; see `remote list`)")
 	_ = cmd.RegisterFlagCompletionFunc("host", hostCompleter)
 	cmd.Flags().StringVar(&socketPath, "socket", incus.DefaultSocket, "Incus unix socket path")
-	cmd.Flags().StringVar(&project, "project", "", "Incus project (default: fleet.yaml or `default`)")
+	cmd.Flags().StringVar(&project, "project", "", "Incus project (default: fleet.yaml or default)")
 	cmd.Flags().BoolVar(&showUnchanged, "show-unchanged", false, "Print objects that already match")
 	cmd.Flags().BoolVar(&showUnmanaged, "show-unmanaged", true, "Print objects that exist in Incus but are not in the fleet")
 	cmd.Flags().StringVar(&format, "format", "colored", "Output format: colored, summary, json")

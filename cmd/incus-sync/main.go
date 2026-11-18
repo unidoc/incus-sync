@@ -17,6 +17,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -75,8 +77,8 @@ func resolveRemoteForHost(host string) (*config.Remote, error) {
 //     (unambiguous, no need to type it every time).
 //  3. Otherwise, error — caller must pass --project.
 //
-// Multi-project commands (sync, diff, list) do NOT call this — they
-// iterate fleet.Projects internally.
+// Multi-project commands do NOT call this: sync and diff iterate the
+// host's fleet.Projects, list and orphans use projectsToQuery.
 func resolveProject(flagValue string) (string, error) {
 	if flagValue != "" {
 		return flagValue, nil
@@ -91,6 +93,96 @@ func resolveProject(flagValue string) (string, error) {
 	return "", fmt.Errorf(
 		"fleet manages multiple projects %v — pass --project to pick one",
 		meta.Projects)
+}
+
+// projectLister is the one server call projectsToQuery needs, so tests
+// can pass a fake instead of a live Incus connection.
+type projectLister interface {
+	GetProjectNames() ([]string, error)
+}
+
+// projectsToQuery returns the projects a read-only, multi-project command
+// (list, orphans) should look in for one --host run, and the fleet-wide
+// projects it skipped because the host does not have them.
+//
+//   - explicitProject == "": every project in fleet.yaml's fleet-wide
+//     `projects:` list that the host actually has (as the server reports
+//     it to this client). This is deliberately NOT the host-narrowed
+//     fleet.Projects: list/orphans exist to find containers that have no
+//     instance file yet, which is exactly when the narrowed set is empty
+//     or missing the project. A project the host does not have (or that
+//     this client's cert cannot see) is returned in skipped, so callers
+//     can say what they did not look at.
+//   - explicitProject != "": exactly that project, after checking it is
+//     in the fleet-wide `projects:` list (a typo is a hard error) and
+//     that the host lists it. Incus answers an instance listing for a
+//     project that does not exist, or that a restricted cert cannot see,
+//     with an empty list and no error, so without this check the caller
+//     would report "nothing there" for a project it never saw.
+func projectsToQuery(fleetPath string, srv projectLister, explicitProject string) (query, skipped []string, err error) {
+	meta, err := config.LoadFleetMeta(fleetPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if explicitProject != "" {
+		if err := checkFleetProject(meta, explicitProject); err != nil {
+			return nil, nil, err
+		}
+	}
+	have, err := srv.GetProjectNames()
+	if err != nil {
+		return nil, nil, fmt.Errorf("list projects on host: %w", err)
+	}
+	if explicitProject != "" {
+		if !slices.Contains(have, explicitProject) {
+			return nil, nil, fmt.Errorf(
+				"project %q is not on this host, or not visible to its cert", explicitProject)
+		}
+		return []string{explicitProject}, nil, nil
+	}
+	for _, p := range meta.Projects {
+		if slices.Contains(have, p) {
+			query = append(query, p)
+		} else {
+			skipped = append(skipped, p)
+		}
+	}
+	return query, skipped, nil
+}
+
+// checkFleetProject errors unless p is in fleet.yaml's projects list.
+func checkFleetProject(meta config.FleetMeta, p string) error {
+	if !slices.Contains(meta.Projects, p) {
+		return fmt.Errorf("--project %q is not in fleet.yaml's `projects:` list %v", p, meta.Projects)
+	}
+	return nil
+}
+
+// checkExplicitProjectEarly validates --project before any remote is
+// resolved or connected to, so a typo fails without a vault unlock.
+func checkExplicitProjectEarly(fleetPath, p string) error {
+	if p == "" {
+		return nil
+	}
+	meta, err := config.LoadFleetMeta(fleetPath)
+	if err != nil {
+		return err
+	}
+	return checkFleetProject(meta, p)
+}
+
+// printProjectScope tells the operator which projects a list/orphans run
+// looked in, and which fleet projects it could not, on stderr so stdout
+// stays the table.
+func printProjectScope(host string, query, skipped []string) {
+	if len(query) == 0 {
+		fmt.Fprintf(os.Stderr, "Checked no projects on %s.\n", host)
+	} else {
+		fmt.Fprintf(os.Stderr, "Checked projects on %s: %s\n", host, strings.Join(query, ", "))
+	}
+	if len(skipped) > 0 {
+		fmt.Fprintf(os.Stderr, "Not on %s (or not visible to its cert): %s\n", host, strings.Join(skipped, ", "))
+	}
 }
 
 // shortHostname returns the local short hostname, or "" if it can't be read.

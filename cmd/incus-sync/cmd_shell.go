@@ -49,7 +49,7 @@ Example:
 			return c.Run()
 		},
 	}
-	cmd.Flags().StringVar(&project, "project", "", "Incus project (default: fleet.yaml or `default`) the instance lives in")
+	cmd.Flags().StringVar(&project, "project", "", "Incus project the instance lives in (default: the only project in fleet.yaml; required if it lists several)")
 	return cmd
 }
 

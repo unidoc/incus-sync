@@ -136,29 +136,22 @@ func runDeepChecks(host string) bool {
 		return false
 	}
 
-	// Verify every project declared in fleet.yaml exists on the host.
-	meta, err := config.LoadFleetMeta(fleetPath)
-	if err != nil {
-		fmt.Printf("fleet.yaml       ERROR: %v\n", err)
+	// Verify every project THIS HOST needs exists there — its own
+	// instances' projects, plus any fleet.yaml host_projects entry.
+	// A project only used on another host is never checked here.
+	lines, projectsOK, networkProject, fatal := deepProjectCheck(fleetPath, host, srv)
+	for _, l := range lines {
+		fmt.Println(l)
+	}
+	if fatal {
 		return false
 	}
-	projects, err := srv.GetProjectNames()
-	if err != nil {
-		fmt.Printf("project list     ERROR: %v\n", err)
+	if !projectsOK {
 		ok = false
-	} else {
-		for _, want := range meta.Projects {
-			if contains(projects, want) {
-				fmt.Printf("project %-12s present\n", want)
-			} else {
-				fmt.Printf("project %-12s MISSING — run `incus project create %s` on the host\n", want, want)
-				ok = false
-			}
-		}
 	}
 	// Profile / network checks run in NetworkProject scope (where
 	// bridges and shared ACLs actually live).
-	srv = srv.UseProject(meta.NetworkProject)
+	srv = srv.UseProject(networkProject)
 
 	profiles, err := srv.GetProfileNames()
 	if err != nil {
@@ -247,4 +240,51 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// checkProjects reports, one line each, whether every project this host
+// needs is among the projects the server lists to this client. A
+// restricted cert only sees the projects it is allowed, so "not listed"
+// means missing on the host OR outside this cert's scope.
+func checkProjects(want, have []string) (lines []string, ok bool) {
+	ok = true
+	for _, p := range want {
+		if contains(have, p) {
+			lines = append(lines, fmt.Sprintf("project %-12s present", p))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf(
+			"project %-12s MISSING or not visible to this cert — create it with `incus project create %s`, or add it to the cert's projects with `incus config trust edit <fingerprint>`",
+			p, p))
+		ok = false
+	}
+	return lines, ok
+}
+
+// deepProjectCheck is doctor --deep's project check. It loads the fleet
+// for host and checks that every project the host needs is listed by the
+// server. If the fleet does not load, it reports that, skips the project
+// check and falls back to fleet.yaml for the network project, so the
+// other deep checks still run; fatal is set only if fleet.yaml itself
+// cannot be read.
+func deepProjectCheck(fleetPath, host string, srv projectLister) (lines []string, ok bool, networkProject string, fatal bool) {
+	fleet, err := config.Load(fleetPath, host)
+	if err != nil {
+		lines = append(lines, fmt.Sprintf("fleet load       ERROR: %v (project check skipped)", err))
+		meta, metaErr := config.LoadFleetMeta(fleetPath)
+		if metaErr != nil {
+			return append(lines, fmt.Sprintf("fleet.yaml       ERROR: %v", metaErr)), false, "", true
+		}
+		return lines, false, meta.NetworkProject, false
+	}
+	if len(fleet.Projects) == 0 {
+		lines = append(lines, "project list     (host declares no instances and no host_projects entry — nothing to check)")
+		return lines, true, fleet.NetworkProject, false
+	}
+	have, err := srv.GetProjectNames()
+	if err != nil {
+		return append(lines, fmt.Sprintf("project list     ERROR: %v", err)), false, fleet.NetworkProject, false
+	}
+	checkLines, allPresent := checkProjects(fleet.Projects, have)
+	return append(lines, checkLines...), allPresent, fleet.NetworkProject, false
 }

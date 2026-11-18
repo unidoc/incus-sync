@@ -5,14 +5,17 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -86,6 +89,7 @@ func remoteBootstrapCmd() *cobra.Command {
 	var (
 		url         string
 		fingerprint string
+		projects    []string
 	)
 	cmd := &cobra.Command{
 		Use:   "bootstrap <host>",
@@ -105,9 +109,10 @@ Full flow:
 
   incus-sync remote bootstrap web1 \
       --url https://web1.example.com:22443 \
-      --fingerprint <sha256-from-incus-info-on-host> | \
+      --fingerprint <sha256-from-incus-info-on-host> \
+      [--projects web] | \
       ssh -p 2282 user@web1 'sudo incus config trust add-certificate - \
-          --name gateway-bastion --restricted --projects default'
+          --name gateway-bastion --restricted --projects default,web'
 
   git add hosts/web1/remote.sops.yaml
   git commit -m "add web1 remote"
@@ -122,20 +127,35 @@ Full flow:
 			if fingerprint == "" {
 				return fmt.Errorf("--fingerprint is required (SHA256 from `incus info` on target host)")
 			}
-			return runRemoteBootstrap(host, url, fingerprint)
+			return runRemoteBootstrap(host, url, fingerprint, projects)
 		},
 	}
 	cmd.Flags().StringVar(&url, "url", "", "Incus HTTPS URL, e.g. https://web1.example.com:22443")
 	cmd.Flags().StringVar(&fingerprint, "fingerprint", "", "SHA256 fingerprint of the Incus server cert (from `incus info` on target)")
+	cmd.Flags().StringSliceVar(&projects, "projects", nil, "Extra fleet.yaml projects to scope the cert to, beyond what this host's instances already use (comma-separated). Use on a new host so orphans/import/adopt can see its containers.")
 	return cmd
 }
 
-func runRemoteBootstrap(host, url, fingerprint string) error {
+func runRemoteBootstrap(host, url, fingerprint string, extraProjects []string) (err error) {
 	// Fail fast if sops isn't on PATH — otherwise we'd write plaintext
 	// certs to disk with no way to encrypt them cleanly.
 	sopsPath, err := exec.LookPath("sops")
 	if err != nil {
 		return fmt.Errorf("sops binary not on PATH — install with `pkg install sops` (FreeBSD) or `apk add sops` (Alpine)")
+	}
+
+	// Check --projects before generating anything, so a typo fails with
+	// nothing to roll back.
+	meta, err := config.LoadFleetMeta(fleetPath)
+	if err != nil {
+		return err
+	}
+	for _, p := range extraProjects {
+		if p = strings.TrimSpace(p); p != "" {
+			if err := checkFleetProject(meta, p); err != nil {
+				return err
+			}
+		}
 	}
 
 	// Generate ECDSA P-256 keypair.
@@ -162,6 +182,32 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
+	// Load (and compute the cert's project scope) BEFORE writing
+	// remote.sops.yaml: an unrelated fleet validation error must fail
+	// here, not leave a secret file written with no success message or
+	// cert PEM ever printed.
+	fleet, dir, created, err := loadFleetForBootstrap(fleetPath, host)
+	if err != nil {
+		return err
+	}
+	// If anything below fails, leave the fleet repo as it was: remove
+	// what this run created, as long as it is still empty.
+	defer func() {
+		if err != nil {
+			removeCreated(created)
+		}
+	}()
+	// Cert needs access to BOTH the network project (where ACLs and
+	// address-sets live) AND every project this host manages, plus any
+	// --projects the operator asked for.
+	scope, err := bootstrapCertProjects(fleet, meta.Projects, extraProjects)
+	if err != nil {
+		return err
+	}
+	certProjects := strings.Join(scope, ",")
+	sum := sha256.Sum256(derBytes)
+	clientFingerprint := hex.EncodeToString(sum[:])
+
 	// Compose remote YAML.
 	normalisedFP := strings.ToLower(strings.ReplaceAll(fingerprint, ":", ""))
 	remoteYAML := struct {
@@ -180,10 +226,6 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 		return err
 	}
 
-	dir := filepath.Join(fleetPath, "hosts", host)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
 	path := filepath.Join(dir, "remote.sops.yaml")
 
 	// Pipe plaintext through sops stdin → capture encrypted stdout →
@@ -212,24 +254,39 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 
 	// Diagnostics to stderr, cert PEM to stdout — so caller can pipe
 	// stdout to `ssh ... 'incus config trust add-certificate -'`.
-	meta, err := config.LoadFleetMeta(fleetPath)
-	if err != nil {
-		return err
+	// fleet and certProjects were computed up front, before writing the
+	// secret file — see the comment above.
+	if shouldPrintScopeNote(fleet, meta.Projects, scope, extraProjects) {
+		fmt.Fprintf(os.Stderr,
+			"NOTE: %s has no instances yet, no fleet.yaml host_projects entry and no\n"+
+				"--projects, so the cert below is scoped to %q only. Until it is widened,\n"+
+				"orphans/list cannot see containers in other projects, import/adopt get a\n"+
+				"permission error there, and sync fails once an instance lands in one.\n"+
+				"To widen it: on the host, add the project to this cert's projects with\n"+
+				"`incus config trust edit %s`, or re-run bootstrap with\n"+
+				"--projects <project> (that makes a NEW key and cert: register it, then\n"+
+				"remove the old trust entry with `incus config trust remove %s`).\n\n",
+			host, fleet.NetworkProject, clientFingerprint, clientFingerprint)
 	}
-	// Cert needs access to BOTH the network project (where ACLs and
-	// address-sets live) AND every managed project (where containers
-	// live). `CertProjects` unions them and removes duplicates.
-	certProjects := strings.Join(meta.CertProjects(), ",")
 	fmt.Fprintf(os.Stderr, "Wrote encrypted %s\n", path)
 	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintf(os.Stderr, "Client cert fingerprint: %s\n", clientFingerprint)
 	fmt.Fprintln(os.Stderr, "Client cert PEM is on stdout. Register with Incus on the target host:")
 	fmt.Fprintf(os.Stderr, "  incus config trust add-certificate - --name gateway-bastion --restricted --projects %s\n", certProjects)
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Ensure every managed project exists first on the target:")
-	for _, p := range meta.Projects {
-		fmt.Fprintf(os.Stderr, "  incus project create %s\n", p)
+	var toCreate []string
+	for _, p := range scope {
+		if p != fleet.NetworkProject {
+			toCreate = append(toCreate, p)
+		}
 	}
-	fmt.Fprintln(os.Stderr, "")
+	if len(toCreate) > 0 {
+		fmt.Fprintln(os.Stderr, "Ensure every managed project exists first on the target:")
+		for _, p := range toCreate {
+			fmt.Fprintf(os.Stderr, "  incus project create %s\n", p)
+		}
+		fmt.Fprintln(os.Stderr, "")
+	}
 	fmt.Fprintf(os.Stderr, "Then commit: git add %s && git commit -m 'add %s remote'\n", path, host)
 
 	// Cert PEM to stdout.
@@ -237,4 +294,80 @@ func runRemoteBootstrap(host, url, fingerprint string) error {
 		return err
 	}
 	return nil
+}
+
+// loadFleetForBootstrap loads the fleet for a host that may not have a
+// hosts/<host>/ directory yet. config.Load requires that directory, so
+// it is created first (and hosts/ with it, if missing); created lists
+// the directories this call made, deepest first. If the load fails they
+// are removed again, so a failed bootstrap does not leave empty
+// directories behind (an empty hosts/<host>/ would also hide a
+// host_projects typo for that name from validate).
+func loadFleetForBootstrap(fleetPath, host string) (fleet *config.Fleet, dir string, created []string, err error) {
+	hostsDir := filepath.Join(fleetPath, "hosts")
+	dir = filepath.Join(hostsDir, host)
+	for _, d := range []string{dir, hostsDir} {
+		if _, statErr := os.Stat(d); os.IsNotExist(statErr) {
+			created = append(created, d)
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, "", nil, err
+	}
+	fleet, err = config.Load(fleetPath, host)
+	if err != nil {
+		removeCreated(created)
+		return nil, "", nil, err
+	}
+	return fleet, dir, created, nil
+}
+
+// removeCreated removes directories a bootstrap run created, deepest
+// first. os.Remove only removes empty directories, so anything that
+// has files in it by now is left alone.
+func removeCreated(dirs []string) {
+	for _, d := range dirs {
+		_ = os.Remove(d)
+	}
+}
+
+// shouldPrintScopeNote reports whether bootstrap should warn that the
+// new cert leaves out fleet projects: the host has no instances and no
+// host_projects entry, no --projects was given, and some fleet project
+// is outside the cert's scope. When the operator named projects (via
+// instances, host_projects or --projects), the scope is their choice.
+func shouldPrintScopeNote(fleet *config.Fleet, fleetProjects, scope, extra []string) bool {
+	if len(fleet.Projects) > 0 {
+		return false
+	}
+	for _, p := range extra {
+		if strings.TrimSpace(p) != "" {
+			return false
+		}
+	}
+	return slices.ContainsFunc(fleetProjects, func(p string) bool {
+		return !slices.Contains(scope, p)
+	})
+}
+
+// bootstrapCertProjects returns the cert's --projects scope: the
+// fleet's network project, this host's effective projects, and any
+// extra projects passed with --projects, de-duplicated. Each extra must
+// be in fleet.yaml's fleet-wide projects list, so a typo is an error
+// rather than a cert scoped to a project the fleet never manages.
+func bootstrapCertProjects(fleet *config.Fleet, fleetProjects, extra []string) ([]string, error) {
+	out := fleet.CertProjects()
+	for _, p := range extra {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if !slices.Contains(fleetProjects, p) {
+			return nil, fmt.Errorf("--projects %q is not in fleet.yaml's projects list %v", p, fleetProjects)
+		}
+		if !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }

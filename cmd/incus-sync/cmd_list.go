@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -34,6 +35,9 @@ in Incus but not in the fleet are shown as "unmanaged".`,
 			if err != nil {
 				return err
 			}
+			if err := checkExplicitProjectEarly(fleetPath, project); err != nil {
+				return err
+			}
 			remote, err := resolveRemoteForHost(host)
 			if err != nil {
 				return err
@@ -42,13 +46,17 @@ in Incus but not in the fleet are shown as "unmanaged".`,
 			if err != nil {
 				return err
 			}
-			// Iterate every managed project; live containers may live
-			// in any of them. --project filter narrows the output.
+			// Default: every fleet-wide project the host has, not just
+			// the ones this host's instance files use, so containers
+			// with no instance file yet still show. --project queries
+			// exactly that project (see projectsToQuery).
+			projects, skipped, err := projectsToQuery(fleetPath, srv, project)
+			if err != nil {
+				return err
+			}
+			printProjectScope(host, projects, skipped)
 			var liveInsts []api.InstanceFull
-			for _, p := range fleet.Projects {
-				if project != "" && project != p {
-					continue
-				}
+			for _, p := range projects {
 				scoped := srv.UseProject(p)
 				got, err := scoped.GetInstancesFull(api.InstanceTypeAny)
 				if err != nil {
@@ -56,17 +64,21 @@ in Incus but not in the fleet are shown as "unmanaged".`,
 				}
 				liveInsts = append(liveInsts, got...)
 			}
-			return runList(fleet, liveInsts)
+			return runList(fleet, liveInsts, projects)
 		},
 	}
 	cmd.Flags().StringVar(&host, "host", "", "Host name (required; see `remote list`)")
 	_ = cmd.RegisterFlagCompletionFunc("host", hostCompleter)
 	cmd.Flags().StringVar(&socketPath, "socket", incus.DefaultSocket, "Incus unix socket path")
-	cmd.Flags().StringVar(&project, "project", "", "Incus project (default: fleet.yaml or `default`)")
+	cmd.Flags().StringVar(&project, "project", "", "Query exactly this Incus project instead of every fleet.yaml project the host has (must be in fleet.yaml's projects list)")
 	return cmd
 }
 
-func runList(fleet *config.Fleet, live []api.InstanceFull) error {
+// runList prints one row per managed instance and per unmanaged live
+// instance. checked is the set of projects that were queried: a managed
+// instance in any other project is shown as NOT-CHECKED, not MISSING,
+// since nothing was asked about it.
+func runList(fleet *config.Fleet, live []api.InstanceFull, checked []string) error {
 	liveByName := map[string]api.InstanceFull{}
 	for _, l := range live {
 		liveByName[l.Name] = l
@@ -87,7 +99,9 @@ func runList(fleet *config.Fleet, live []api.InstanceFull) error {
 		managed[name] = true
 		status := "MISSING"
 		ips := ""
-		if l, ok := liveByName[name]; ok {
+		if !slices.Contains(checked, inst.Project) {
+			status = "NOT-CHECKED"
+		} else if l, ok := liveByName[name]; ok {
 			status = strings.ToUpper(l.Status)
 			ips = strings.Join(instanceIPs(l), " ")
 		}

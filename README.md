@@ -126,6 +126,36 @@ Full schema: [docs/schema.md](docs/schema.md). Complete runnable
 example: [examples/minimal-fleet](examples/minimal-fleet) — clone it,
 run `validate`/`render`/`explain` against it, no Incus daemon needed.
 
+## Projects
+
+`fleet.yaml`'s `projects:` list is fleet-wide: every instance's
+`project:` field must appear in it. But each host's `diff`/`sync`/
+`doctor` only touch the projects its own instances actually use, and a
+host's remote cert is only scoped to those. A project only declared on
+host A is never contacted on host B's `diff`/`sync`. This matters once
+two hosts manage different, non-overlapping Incus projects: without
+it, every host would need every fleet-wide project to exist (and be
+cert-authorized) on its own Incus daemon, even for projects it never
+touches. `list`/`orphans` check every fleet project the host has, so
+containers without an instance file yet still show.
+
+To pre-declare a project for a host before any instance on it uses one
+yet (e.g. bootstrapping a brand-new host), add it under `host_projects:`
+in `fleet.yaml`:
+
+```yaml
+projects:
+  - web
+  - db
+host_projects:
+  host-c:
+    - db   # host-c will use this project once instances land
+```
+
+See [docs/schema.md](docs/schema.md#host-scoped-projects) for the full
+rule. Most fleets never need `host_projects` — it only matters once a
+project is scoped to a subset of hosts.
+
 ## Instance file (Option 4 flat form)
 
 ```yaml
@@ -166,8 +196,11 @@ Two connection modes, chosen automatically per host:
   `hosts/<host>/remote.sops.yaml` exists. The file holds the host's API
   URL and pinned server-certificate fingerprint in plaintext, and a
   SOPS-encrypted client cert/key. Bootstrap one with
-  `incus-sync remote bootstrap <host> --url https://<host>:8443` — it
-  generates a keypair, prints the enrollment command to run on the
+  `incus-sync remote bootstrap <host> --url https://<host>:8443` (add
+  `--projects <p>` on a new host so its cert covers the projects you
+  will import from) — it
+  generates a keypair, prints the client cert fingerprint and the
+  enrollment command to run on the
   target (`incus config trust add-certificate ...`), and writes the
   encrypted `remote.sops.yaml` for you to commit.
 
