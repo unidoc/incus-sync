@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -63,7 +64,7 @@ in Incus but not in the fleet are shown as "unmanaged".`,
 				}
 				liveInsts = append(liveInsts, got...)
 			}
-			return runList(fleet, liveInsts)
+			return runList(fleet, liveInsts, projects)
 		},
 	}
 	cmd.Flags().StringVar(&host, "host", "", "Host name (required; see `remote list`)")
@@ -73,7 +74,11 @@ in Incus but not in the fleet are shown as "unmanaged".`,
 	return cmd
 }
 
-func runList(fleet *config.Fleet, live []api.InstanceFull) error {
+// runList prints one row per managed instance and per unmanaged live
+// instance. checked is the set of projects that were queried: a managed
+// instance in any other project is shown as NOT-CHECKED, not MISSING,
+// since nothing was asked about it.
+func runList(fleet *config.Fleet, live []api.InstanceFull, checked []string) error {
 	liveByName := map[string]api.InstanceFull{}
 	for _, l := range live {
 		liveByName[l.Name] = l
@@ -94,7 +99,9 @@ func runList(fleet *config.Fleet, live []api.InstanceFull) error {
 		managed[name] = true
 		status := "MISSING"
 		ips := ""
-		if l, ok := liveByName[name]; ok {
+		if !slices.Contains(checked, inst.Project) {
+			status = "NOT-CHECKED"
+		} else if l, ok := liveByName[name]; ok {
 			status = strings.ToUpper(l.Status)
 			ips = strings.Join(instanceIPs(l), " ")
 		}

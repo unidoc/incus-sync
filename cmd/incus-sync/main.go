@@ -114,8 +114,11 @@ type projectLister interface {
 //     this client's cert cannot see) is returned in skipped, so callers
 //     can say what they did not look at.
 //   - explicitProject != "": exactly that project, after checking it is
-//     in the fleet-wide `projects:` list (a typo is a hard error). The
-//     server is not asked, so a missing project fails loudly on query.
+//     in the fleet-wide `projects:` list (a typo is a hard error) and
+//     that the host lists it. Incus answers an instance listing for a
+//     project that does not exist, or that a restricted cert cannot see,
+//     with an empty list and no error, so without this check the caller
+//     would report "nothing there" for a project it never saw.
 func projectsToQuery(fleetPath string, srv projectLister, explicitProject string) (query, skipped []string, err error) {
 	meta, err := config.LoadFleetMeta(fleetPath)
 	if err != nil {
@@ -125,11 +128,17 @@ func projectsToQuery(fleetPath string, srv projectLister, explicitProject string
 		if err := checkFleetProject(meta, explicitProject); err != nil {
 			return nil, nil, err
 		}
-		return []string{explicitProject}, nil, nil
 	}
 	have, err := srv.GetProjectNames()
 	if err != nil {
 		return nil, nil, fmt.Errorf("list projects on host: %w", err)
+	}
+	if explicitProject != "" {
+		if !slices.Contains(have, explicitProject) {
+			return nil, nil, fmt.Errorf(
+				"project %q is not on this host, or not visible to its cert", explicitProject)
+		}
+		return []string{explicitProject}, nil, nil
 	}
 	for _, p := range meta.Projects {
 		if slices.Contains(have, p) {

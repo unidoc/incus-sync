@@ -144,6 +144,20 @@ func runRemoteBootstrap(host, url, fingerprint string, extraProjects []string) (
 		return fmt.Errorf("sops binary not on PATH — install with `pkg install sops` (FreeBSD) or `apk add sops` (Alpine)")
 	}
 
+	// Check --projects before generating anything, so a typo fails with
+	// nothing to roll back.
+	meta, err := config.LoadFleetMeta(fleetPath)
+	if err != nil {
+		return err
+	}
+	for _, p := range extraProjects {
+		if p = strings.TrimSpace(p); p != "" {
+			if err := checkFleetProject(meta, p); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Generate ECDSA P-256 keypair.
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -177,19 +191,15 @@ func runRemoteBootstrap(host, url, fingerprint string, extraProjects []string) (
 		return err
 	}
 	// If anything below fails, leave the fleet repo as it was: remove
-	// hosts/<host>/ again if this run created it and it is still empty.
+	// what this run created, as long as it is still empty.
 	defer func() {
-		if err != nil && created {
-			_ = os.Remove(dir)
+		if err != nil {
+			removeCreated(created)
 		}
 	}()
 	// Cert needs access to BOTH the network project (where ACLs and
 	// address-sets live) AND every project this host manages, plus any
 	// --projects the operator asked for.
-	meta, err := config.LoadFleetMeta(fleetPath)
-	if err != nil {
-		return err
-	}
 	scope, err := bootstrapCertProjects(fleet, meta.Projects, extraProjects)
 	if err != nil {
 		return err
@@ -246,13 +256,7 @@ func runRemoteBootstrap(host, url, fingerprint string, extraProjects []string) (
 	// stdout to `ssh ... 'incus config trust add-certificate -'`.
 	// fleet and certProjects were computed up front, before writing the
 	// secret file — see the comment above.
-	// NOTE for a new host (no instances, no host_projects, no --projects)
-	// whose cert leaves out some of the fleet's projects: nothing says yet
-	// which of them it will use, so say how to widen the cert.
-	missesFleetProject := slices.ContainsFunc(meta.Projects, func(p string) bool {
-		return !slices.Contains(scope, p)
-	})
-	if len(fleet.Projects) == 0 && len(extraProjects) == 0 && missesFleetProject {
+	if shouldPrintScopeNote(fleet, meta.Projects, scope, extraProjects) {
 		fmt.Fprintf(os.Stderr,
 			"NOTE: %s has no instances yet, no fleet.yaml host_projects entry and no\n"+
 				"--projects, so the cert below is scoped to %q only. Until it is widened,\n"+
@@ -294,26 +298,56 @@ func runRemoteBootstrap(host, url, fingerprint string, extraProjects []string) (
 
 // loadFleetForBootstrap loads the fleet for a host that may not have a
 // hosts/<host>/ directory yet. config.Load requires that directory, so
-// it is created first; created reports whether this call made it. If
-// the load fails, a directory this call created is removed again, so a
-// failed bootstrap does not leave an empty hosts/<host>/ behind (which
-// would also hide a host_projects typo for that name from validate).
-func loadFleetForBootstrap(fleetPath, host string) (fleet *config.Fleet, dir string, created bool, err error) {
-	dir = filepath.Join(fleetPath, "hosts", host)
-	if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
-		created = true
+// it is created first (and hosts/ with it, if missing); created lists
+// the directories this call made, deepest first. If the load fails they
+// are removed again, so a failed bootstrap does not leave empty
+// directories behind (an empty hosts/<host>/ would also hide a
+// host_projects typo for that name from validate).
+func loadFleetForBootstrap(fleetPath, host string) (fleet *config.Fleet, dir string, created []string, err error) {
+	hostsDir := filepath.Join(fleetPath, "hosts")
+	dir = filepath.Join(hostsDir, host)
+	for _, d := range []string{dir, hostsDir} {
+		if _, statErr := os.Stat(d); os.IsNotExist(statErr) {
+			created = append(created, d)
+		}
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, "", false, err
+		return nil, "", nil, err
 	}
 	fleet, err = config.Load(fleetPath, host)
 	if err != nil {
-		if created {
-			_ = os.Remove(dir)
-		}
-		return nil, "", false, err
+		removeCreated(created)
+		return nil, "", nil, err
 	}
 	return fleet, dir, created, nil
+}
+
+// removeCreated removes directories a bootstrap run created, deepest
+// first. os.Remove only removes empty directories, so anything that
+// has files in it by now is left alone.
+func removeCreated(dirs []string) {
+	for _, d := range dirs {
+		_ = os.Remove(d)
+	}
+}
+
+// shouldPrintScopeNote reports whether bootstrap should warn that the
+// new cert leaves out fleet projects: the host has no instances and no
+// host_projects entry, no --projects was given, and some fleet project
+// is outside the cert's scope. When the operator named projects (via
+// instances, host_projects or --projects), the scope is their choice.
+func shouldPrintScopeNote(fleet *config.Fleet, fleetProjects, scope, extra []string) bool {
+	if len(fleet.Projects) > 0 {
+		return false
+	}
+	for _, p := range extra {
+		if strings.TrimSpace(p) != "" {
+			return false
+		}
+	}
+	return slices.ContainsFunc(fleetProjects, func(p string) bool {
+		return !slices.Contains(scope, p)
+	})
 }
 
 // bootstrapCertProjects returns the cert's --projects scope: the

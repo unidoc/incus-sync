@@ -196,8 +196,11 @@ Two connection modes, chosen automatically per host:
   `hosts/<host>/remote.sops.yaml` exists. The file holds the host's API
   URL and pinned server-certificate fingerprint in plaintext, and a
   SOPS-encrypted client cert/key. Bootstrap one with
-  `incus-sync remote bootstrap <host> --url https://<host>:8443` — it
-  generates a keypair, prints the enrollment command to run on the
+  `incus-sync remote bootstrap <host> --url https://<host>:8443` (add
+  `--projects <p>` on a new host so its cert covers the projects you
+  will import from) — it
+  generates a keypair, prints the client cert fingerprint and the
+  enrollment command to run on the
   target (`incus config trust add-certificate ...`), and writes the
   encrypted `remote.sops.yaml` for you to commit.
 

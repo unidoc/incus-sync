@@ -157,7 +157,7 @@ Safety:
 	cmd.Flags().StringVar(&host, "host", "", "Host name (required; see `remote list`)")
 	_ = cmd.RegisterFlagCompletionFunc("host", hostCompleter)
 	cmd.Flags().StringVar(&socketPath, "socket", incus.DefaultSocket, "Incus unix socket path")
-	cmd.Flags().StringVar(&project, "project", "", "Incus project (default: fleet.yaml or `default`)")
+	cmd.Flags().StringVar(&project, "project", "", "Incus project (default: fleet.yaml or default)")
 	cmd.Flags().BoolVar(&apply, "apply", false, "Actually apply changes (default: dry run)")
 	cmd.Flags().BoolVar(&force, "force", false, "Override refuse-worthy checks (empty ACL/set, widening ingress-default, policy violations such as privileged instances, which are left as they are)")
 	cmd.Flags().BoolVar(&dirtyOK, "dirty-ok", false, "Proceed even when fleet repo is dirty or behind upstream")

@@ -139,41 +139,15 @@ func runDeepChecks(host string) bool {
 	// Verify every project THIS HOST needs exists there — its own
 	// instances' projects, plus any fleet.yaml host_projects entry.
 	// A project only used on another host is never checked here.
-	// If the fleet does not load, report it, skip only the project check
-	// and carry on with the rest (they only need fleet.yaml).
-	var wantProjects []string
-	networkProject := ""
-	checkProjectList := true
-	if fleet, err := config.Load(fleetPath, host); err != nil {
-		fmt.Printf("fleet load       ERROR: %v (project check skipped)\n", err)
-		ok = false
-		checkProjectList = false
-		meta, metaErr := config.LoadFleetMeta(fleetPath)
-		if metaErr != nil {
-			fmt.Printf("fleet.yaml       ERROR: %v\n", metaErr)
-			return false
-		}
-		networkProject = meta.NetworkProject
-	} else {
-		wantProjects = fleet.Projects
-		networkProject = fleet.NetworkProject
-		if len(wantProjects) == 0 {
-			fmt.Println("project list     (host declares no instances and no host_projects entry — nothing to check)")
-		}
+	lines, projectsOK, networkProject, fatal := deepProjectCheck(fleetPath, host, srv)
+	for _, l := range lines {
+		fmt.Println(l)
 	}
-	if checkProjectList {
-		if projects, err := srv.GetProjectNames(); err != nil {
-			fmt.Printf("project list     ERROR: %v\n", err)
-			ok = false
-		} else {
-			lines, allPresent := checkProjects(wantProjects, projects)
-			for _, l := range lines {
-				fmt.Println(l)
-			}
-			if !allPresent {
-				ok = false
-			}
-		}
+	if fatal {
+		return false
+	}
+	if !projectsOK {
+		ok = false
 	}
 	// Profile / network checks run in NetworkProject scope (where
 	// bridges and shared ACLs actually live).
@@ -285,4 +259,32 @@ func checkProjects(want, have []string) (lines []string, ok bool) {
 		ok = false
 	}
 	return lines, ok
+}
+
+// deepProjectCheck is doctor --deep's project check. It loads the fleet
+// for host and checks that every project the host needs is listed by the
+// server. If the fleet does not load, it reports that, skips the project
+// check and falls back to fleet.yaml for the network project, so the
+// other deep checks still run; fatal is set only if fleet.yaml itself
+// cannot be read.
+func deepProjectCheck(fleetPath, host string, srv projectLister) (lines []string, ok bool, networkProject string, fatal bool) {
+	fleet, err := config.Load(fleetPath, host)
+	if err != nil {
+		lines = append(lines, fmt.Sprintf("fleet load       ERROR: %v (project check skipped)", err))
+		meta, metaErr := config.LoadFleetMeta(fleetPath)
+		if metaErr != nil {
+			return append(lines, fmt.Sprintf("fleet.yaml       ERROR: %v", metaErr)), false, "", true
+		}
+		return lines, false, meta.NetworkProject, false
+	}
+	if len(fleet.Projects) == 0 {
+		lines = append(lines, "project list     (host declares no instances and no host_projects entry — nothing to check)")
+		return lines, true, fleet.NetworkProject, false
+	}
+	have, err := srv.GetProjectNames()
+	if err != nil {
+		return append(lines, fmt.Sprintf("project list     ERROR: %v", err)), false, fleet.NetworkProject, false
+	}
+	checkLines, allPresent := checkProjects(fleet.Projects, have)
+	return append(lines, checkLines...), allPresent, fleet.NetworkProject, false
 }

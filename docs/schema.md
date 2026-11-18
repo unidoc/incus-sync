@@ -36,12 +36,20 @@ only by host A never shows up there for host B — `diff`/`sync --host B`
 does not query it, and `remote bootstrap B` does not request cert access
 to it.
 
+Because a host's `diff`/`sync` only look in its own projects, the
+isolation-policy check (a live container with a forbidden setting, such
+as `security.privileged=true`, blocks `sync --apply`) also only covers
+those projects. A container in another fleet project on that host is not
+checked. Add the project to the host's `host_projects` entry to keep it
+covered.
+
 `list` and `orphans` are read-only and look wider on purpose: by default
 they check every project in `projects:` that the host has, so containers
 with no instance file yet (the ones `orphans` exists to find) still
 show. They print which projects they checked and which fleet projects
-the host does not have or its cert cannot see. `--project <name>`
-checks exactly that project.
+the host does not have or its cert cannot see; `list` marks managed
+instances in an unchecked project as `NOT-CHECKED`. `--project <name>`
+checks exactly that project, and fails if the host does not list it.
 
 `host_projects` exists only to pre-declare a project before any
 instance on that host uses it yet — e.g. running `doctor --deep` or
@@ -56,11 +64,14 @@ derived automatically.
 A host's remote cert is scoped when `remote bootstrap` runs. On a new
 host with no instance files, that is only the network project unless you
 pass `--projects <project>` (or add a `host_projects` entry first). Until
-the cert covers a project, `list`/`orphans` cannot see containers there
-(they report it as skipped), `import`/`adopt` get a permission error,
-and `sync` fails with an authorization error once an instance lands in
-it; `doctor --deep` shows the project as missing or not visible to the
-cert. To widen an existing cert, run `incus config trust edit
+the cert covers a project, Incus answers instance listings for it with
+an empty list, not an error. So `list`/`orphans` report it as skipped,
+`import`/`adopt` get a permission error, `diff` shows the host's
+existing instances there as `create`, and `sync --apply` then fails with
+an authorization error; `doctor --deep` shows the project as missing or
+not visible to the cert. Incus also refuses to register a cert scoped to
+a project that does not exist on the host, which is why the scope
+follows the host's own projects. To widen an existing cert, run `incus config trust edit
 <client-fingerprint>` on the host and add the project to `projects:`
 (bootstrap prints the client fingerprint). Re-running `remote bootstrap`
 makes a new key and cert instead: register it, then remove the old
