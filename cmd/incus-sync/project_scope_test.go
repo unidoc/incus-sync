@@ -160,3 +160,30 @@ func TestRunOrphansNoAllClearWhenNothingChecked(t *testing.T) {
 		t.Errorf("unexpected output with nothing checked: %q", out)
 	}
 }
+
+func TestBootstrapCertProjects(t *testing.T) {
+	fleet := &config.Fleet{NetworkProject: "default"} // new host: no instances
+	got, err := bootstrapCertProjects(fleet, []string{"web", "db"}, []string{"web", " web", ""})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !slices.Equal(got, []string{"default", "web"}) {
+		t.Errorf("got %v, want [default web]", got)
+	}
+	if _, err := bootstrapCertProjects(fleet, []string{"web"}, []string{"nope"}); err == nil {
+		t.Error("expected an error for a --projects entry not in fleet.yaml")
+	}
+}
+
+func TestCheckExplicitProjectEarly(t *testing.T) {
+	dir := writeTestFleetYAML(t, []string{"web"})
+	if err := checkExplicitProjectEarly(dir, ""); err != nil {
+		t.Errorf("empty --project: %v", err)
+	}
+	if err := checkExplicitProjectEarly(dir, "web"); err != nil {
+		t.Errorf("--project web: %v", err)
+	}
+	if err := checkExplicitProjectEarly(dir, "nope"); err == nil {
+		t.Error("expected an error for --project nope")
+	}
+}

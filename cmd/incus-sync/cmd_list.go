@@ -34,6 +34,9 @@ in Incus but not in the fleet are shown as "unmanaged".`,
 			if err != nil {
 				return err
 			}
+			if err := checkExplicitProjectEarly(fleetPath, project); err != nil {
+				return err
+			}
 			remote, err := resolveRemoteForHost(host)
 			if err != nil {
 				return err

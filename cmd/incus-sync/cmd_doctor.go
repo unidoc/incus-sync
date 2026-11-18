@@ -139,30 +139,45 @@ func runDeepChecks(host string) bool {
 	// Verify every project THIS HOST needs exists there — its own
 	// instances' projects, plus any fleet.yaml host_projects entry.
 	// A project only used on another host is never checked here.
-	fleet, err := config.Load(fleetPath, host)
-	if err != nil {
-		fmt.Printf("fleet load       ERROR: %v\n", err)
-		return false
-	}
-	if len(fleet.Projects) == 0 {
-		fmt.Println("project list     (host declares no instances and no host_projects entry — nothing to check)")
-	}
-	projects, err := srv.GetProjectNames()
-	if err != nil {
-		fmt.Printf("project list     ERROR: %v\n", err)
+	// If the fleet does not load, report it, skip only the project check
+	// and carry on with the rest (they only need fleet.yaml).
+	var wantProjects []string
+	networkProject := ""
+	checkProjectList := true
+	if fleet, err := config.Load(fleetPath, host); err != nil {
+		fmt.Printf("fleet load       ERROR: %v (project check skipped)\n", err)
 		ok = false
-	} else {
-		lines, allPresent := checkProjects(fleet.Projects, projects)
-		for _, l := range lines {
-			fmt.Println(l)
+		checkProjectList = false
+		meta, metaErr := config.LoadFleetMeta(fleetPath)
+		if metaErr != nil {
+			fmt.Printf("fleet.yaml       ERROR: %v\n", metaErr)
+			return false
 		}
-		if !allPresent {
+		networkProject = meta.NetworkProject
+	} else {
+		wantProjects = fleet.Projects
+		networkProject = fleet.NetworkProject
+		if len(wantProjects) == 0 {
+			fmt.Println("project list     (host declares no instances and no host_projects entry — nothing to check)")
+		}
+	}
+	if checkProjectList {
+		if projects, err := srv.GetProjectNames(); err != nil {
+			fmt.Printf("project list     ERROR: %v\n", err)
 			ok = false
+		} else {
+			lines, allPresent := checkProjects(wantProjects, projects)
+			for _, l := range lines {
+				fmt.Println(l)
+			}
+			if !allPresent {
+				ok = false
+			}
 		}
 	}
 	// Profile / network checks run in NetworkProject scope (where
 	// bridges and shared ACLs actually live).
-	srv = srv.UseProject(fleet.NetworkProject)
+	srv = srv.UseProject(networkProject)
 
 	profiles, err := srv.GetProfileNames()
 	if err != nil {

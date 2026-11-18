@@ -48,6 +48,9 @@ under fleet control. Nothing is mutated.`,
 			if err != nil {
 				return err
 			}
+			if err := checkExplicitProjectEarly(fleetPath, project); err != nil {
+				return err
+			}
 			remote, err := resolveRemoteForHost(host)
 			if err != nil {
 				return err

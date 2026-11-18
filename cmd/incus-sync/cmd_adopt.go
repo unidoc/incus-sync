@@ -59,7 +59,7 @@ overwritten only if they differ.`,
 	_ = cmd.RegisterFlagCompletionFunc("host", hostCompleter)
 	cmd.Flags().StringVar(&outDir, "out", "", "Output directory (default: <fleet-path>/hosts/<host>)")
 	cmd.Flags().StringVar(&socketPath, "socket", incus.DefaultSocket, "Incus unix socket path")
-	cmd.Flags().StringVar(&project, "project", "", "Incus project (default: fleet.yaml or `default`) to read from")
+	cmd.Flags().StringVar(&project, "project", "", "Incus project to read from (default: the only project in fleet.yaml; required if it lists several)")
 
 	return cmd
 }

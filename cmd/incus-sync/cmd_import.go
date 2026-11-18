@@ -82,7 +82,7 @@ to pull those definitions in as well.`,
 	cmd.Flags().StringVar(&host, "host", "", "Host name (required; see `remote list`)")
 	_ = cmd.RegisterFlagCompletionFunc("host", hostCompleter)
 	cmd.Flags().StringVar(&socketPath, "socket", incus.DefaultSocket, "Incus unix socket path (local target only)")
-	cmd.Flags().StringVar(&project, "project", "", "Incus project (default: fleet.yaml or `default`)")
+	cmd.Flags().StringVar(&project, "project", "", "Incus project (default: the only project in fleet.yaml; required if it lists several)")
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite an existing instance.yaml")
 	return cmd
 }

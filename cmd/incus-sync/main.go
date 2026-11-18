@@ -77,8 +77,8 @@ func resolveRemoteForHost(host string) (*config.Remote, error) {
 //     (unambiguous, no need to type it every time).
 //  3. Otherwise, error — caller must pass --project.
 //
-// Multi-project commands (sync, diff, list) do NOT call this — they
-// iterate fleet.Projects internally.
+// Multi-project commands do NOT call this: sync and diff iterate the
+// host's fleet.Projects, list and orphans use projectsToQuery.
 func resolveProject(flagValue string) (string, error) {
 	if flagValue != "" {
 		return flagValue, nil
@@ -122,9 +122,8 @@ func projectsToQuery(fleetPath string, srv projectLister, explicitProject string
 		return nil, nil, err
 	}
 	if explicitProject != "" {
-		if !slices.Contains(meta.Projects, explicitProject) {
-			return nil, nil, fmt.Errorf(
-				"--project %q is not in fleet.yaml's `projects:` list %v", explicitProject, meta.Projects)
+		if err := checkFleetProject(meta, explicitProject); err != nil {
+			return nil, nil, err
 		}
 		return []string{explicitProject}, nil, nil
 	}
@@ -140,6 +139,27 @@ func projectsToQuery(fleetPath string, srv projectLister, explicitProject string
 		}
 	}
 	return query, skipped, nil
+}
+
+// checkFleetProject errors unless p is in fleet.yaml's projects list.
+func checkFleetProject(meta config.FleetMeta, p string) error {
+	if !slices.Contains(meta.Projects, p) {
+		return fmt.Errorf("--project %q is not in fleet.yaml's `projects:` list %v", p, meta.Projects)
+	}
+	return nil
+}
+
+// checkExplicitProjectEarly validates --project before any remote is
+// resolved or connected to, so a typo fails without a vault unlock.
+func checkExplicitProjectEarly(fleetPath, p string) error {
+	if p == "" {
+		return nil
+	}
+	meta, err := config.LoadFleetMeta(fleetPath)
+	if err != nil {
+		return err
+	}
+	return checkFleetProject(meta, p)
 }
 
 // printProjectScope tells the operator which projects a list/orphans run

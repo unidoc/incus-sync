@@ -53,13 +53,18 @@ is almost always a typo. Most fleets never need it: in a fleet where
 every host already has instances in the projects it uses, the scope is
 derived automatically.
 
-When an existing host gets its first instance in a project its cert was
-not scoped for, `sync` fails with an authorization error from Incus.
-`doctor --deep` shows that project as missing or not visible to the
-cert. Widen the cert on the host (`incus config trust edit
-<fingerprint>`, add the project to `projects:`), or re-run `remote
-bootstrap`, which makes a new key and cert that must be registered in
-place of the old one.
+A host's remote cert is scoped when `remote bootstrap` runs. On a new
+host with no instance files, that is only the network project unless you
+pass `--projects <project>` (or add a `host_projects` entry first). Until
+the cert covers a project, `list`/`orphans` cannot see containers there
+(they report it as skipped), `import`/`adopt` get a permission error,
+and `sync` fails with an authorization error once an instance lands in
+it; `doctor --deep` shows the project as missing or not visible to the
+cert. To widen an existing cert, run `incus config trust edit
+<client-fingerprint>` on the host and add the project to `projects:`
+(bootstrap prints the client fingerprint). Re-running `remote bootstrap`
+makes a new key and cert instead: register it, then remove the old
+trust entry.
 
 ## .sops.yaml
 
